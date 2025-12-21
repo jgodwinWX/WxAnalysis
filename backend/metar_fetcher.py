@@ -56,14 +56,14 @@ def calculate_flight_rule(visibility_mi: Optional[float], ceiling_ft: Optional[f
         return "UNKNOWN"
     
     # Check visibility
-    vis_vfr = visibility_mi is None or visibility_mi >= 5.0
-    vis_mvfr = visibility_mi is not None and 3.0 <= visibility_mi < 5.0
+    vis_vfr = visibility_mi is None or visibility_mi > 5.0
+    vis_mvfr = visibility_mi is not None and 3.0 <= visibility_mi <= 5.0
     vis_ifr = visibility_mi is not None and 1.0 <= visibility_mi < 3.0
     vis_lifr = visibility_mi is not None and visibility_mi < 1.0
     
     # Check ceiling
-    ceil_vfr = ceiling_ft is None or ceiling_ft >= 3000
-    ceil_mvfr = ceiling_ft is not None and 1000 <= ceiling_ft < 3000
+    ceil_vfr = ceiling_ft is None or ceiling_ft > 3000
+    ceil_mvfr = ceiling_ft is not None and 1000 <= ceiling_ft <= 3000
     ceil_ifr = ceiling_ft is not None and 500 <= ceiling_ft < 1000
     ceil_lifr = ceiling_ft is not None and ceiling_ft < 500
     
@@ -233,6 +233,19 @@ def fetch_current_metars() -> List[dict]:
                     continue
                 seen_stations.add(station_id)
                 
+                # Extract observation valid time (IEM "valid" looks like "YYYY-MM-DD HH:MM" UTC)
+                obs_time = None
+                valid_str = (row.get("valid") or "").strip()
+                if valid_str:
+                    try:
+                        # Try ISO formats too
+                        dt = datetime.fromisoformat(valid_str.replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        obs_time = dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                    except Exception:
+                        obs_time = None
+                
                 # Extract coordinates
                 try:
                     lat = float(row.get("lat", 0))
@@ -314,7 +327,7 @@ def fetch_current_metars() -> List[dict]:
                         try:
                             level_ft = None
                             if skyl and skyl.lower() not in ("", "m", "null"):
-                                level_ft = float(skyl) * 100  # Convert to feet
+                                level_ft = float(skyl)  # Convert to a float in feet
                             
                             sky_conditions.append({
                                 "cover": skyc,
@@ -369,6 +382,7 @@ def fetch_current_metars() -> List[dict]:
                 observations.append({
                     "id": station_id,
                     "name": station_name,
+                    "obsTimeUtc": obs_time,
                     "lat": round(lat, 4),
                     "lon": round(lon, 4),
                     "tempC": round(temp_c, 1),

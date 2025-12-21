@@ -10,6 +10,7 @@ type SkyCondition = {
 type SurfaceObs = {
   id: string;
   name: string;
+  obsTimeUtc: string | null;
   lat: number;
   lon: number;
   tempC: number;
@@ -53,11 +54,59 @@ function thinByPixelGrid(
   return out;
 }
 
+// Compute the number of minutes ago that an observation was made
+function minutesAgo(iso: string | null): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.round((Date.now() - t) / 60000);
+}
+
+function ageMinutes(iso: string | null): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
+function formatAge(iso: string | null): string {
+  const m = ageMinutes(iso);
+  if (m === null) return "";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${h}h ${mm}m ago`;
+}
+
+// Determine the CSS class for the observation age
+function obsAgeClass(iso: string | null): string {
+  const m = ageMinutes(iso);
+  if (m === null) return "";
+  if (m < 60) return "obs-age-fresh";      // < 60 min
+  if (m <= 120) return "obs-age-amber";    // 60–120 min
+  return "obs-age-old";                    // > 120 min
+}
+
+// Format a UTC ISO string as "HH:MMZ"
+function formatZulu(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toISOString().slice(11, 16) + "Z";
+}
+
+// Format the sky conditions as "CLR///" or "SCT015"
+function formatSky(sky: SkyCondition[]) {
+  return sky
+    .map(l => `${l.cover}${l.level_ft !== null ? String(Math.round(l.level_ft / 100)).padStart(3,"0") : "///"}`)
+    .join(" ");
+}
+
 function App() {
   const [obs, setObs] = useState<SurfaceObs[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [viewState, setViewState] = useState<ViewState>({
+  const [viewState, setViewState] = useState<Partial<ViewState>>({
     longitude: -97.6,
     latitude: 35.4,
     zoom: 6,
@@ -427,6 +476,7 @@ function App() {
                 setSelectedStation(station);
 
                 console.log("clicked station", id);
+                console.log("clicked obsTimeUtc:", station?.obsTimeUtc);
               }}
             >
               <NavigationControl position="top-left" />
@@ -496,6 +546,14 @@ function App() {
                             <span className="detail-label">Location:</span>
                             <span>{s.name} ({s.id})</span>
                           </div>
+                          {s.obsTimeUtc && (
+                            <div className="detail-row">
+                              <span className="detail-label">Observation Time:</span>
+                              <span className={obsAgeClass(s.obsTimeUtc)}>
+                                {new Date(s.obsTimeUtc).toLocaleString()} ({formatAge(s.obsTimeUtc)})
+                              </span>
+                            </div>
+                          )}
                           
                           <div className="detail-section">
                             <div className="detail-section-title">Flight Conditions</div>
@@ -639,7 +697,14 @@ function App() {
         <div className="popup-overlay" onClick={closePopup}>
           <div className="popup-content" onClick={(e) => e.stopPropagation()}>
             <div className="popup-header">
-              <h3>{selectedStation.name} ({selectedStation.id})</h3>
+              <div>
+                  <h3>{selectedStation.name} ({selectedStation.id})</h3>
+                  {selectedStation.obsTimeUtc && (
+                    <p className={obsAgeClass(selectedStation.obsTimeUtc)}>
+                      {new Date(selectedStation.obsTimeUtc).toLocaleString()} ({formatAge(selectedStation.obsTimeUtc)})
+                    </p>
+                  )}
+              </div>
               <button className="popup-close" onClick={closePopup} aria-label="Close">
                 ×
               </button>

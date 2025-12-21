@@ -303,6 +303,19 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Override the generic "last-child" detail text color for obs age */
+.detail-row span.obs-age-fresh {
+  color: #4ade80; /* green */
+}
+
+.detail-row span.obs-age-amber {
+  color: #fbbf24; /* amber */
+}
+
+.detail-row span.obs-age-old {
+  color: #f87171; /* red */
+}
+
 .detail-section {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
@@ -364,6 +377,18 @@
 
 .sky-condition {
   font-variant-numeric: tabular-nums;
+}
+
+.obs-age-fresh {
+  color: #4ade80; /* green */
+}
+
+.obs-age-amber {
+  color: #fbbf24; /* amber */
+}
+
+.obs-age-old {
+  color: #f87171; /* red */
 }
 
 .raw-metar {

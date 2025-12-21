@@ -21,6 +21,7 @@ class SkyCondition(BaseModel):
 
 class SurfaceObs(BaseModel):
     id: str
+    obsTimeUtc: Optional[str] = None
     name: str
     lat: float
     lon: float
@@ -82,6 +83,7 @@ async def update_observations():
                         name=obs_dict["name"],
                         lat=obs_dict["lat"],
                         lon=obs_dict["lon"],
+                        obsTimeUtc=obs_dict.get("obsTimeUtc"),
                         tempC=obs_dict["tempC"],
                         dewpointC=obs_dict.get("dewpointC"),
                         windDirDeg=obs_dict.get("windDirDeg"),
