@@ -102,6 +102,116 @@ function formatSky(sky: SkyCondition[]) {
     .join(" ");
 }
 
+function drawWindBarb(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  attachRadius: number,
+  dirDeg: number | null,
+  spdKt: number | null
+) {
+
+  if (dirDeg == null || spdKt == null) return;
+  const spd = Math.max(0, spdKt);
+
+  // Calm wind: small circle
+  if (spd < 2) {
+    const prev = ctx.lineWidth;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = prev;
+    return;
+  }
+
+  // Staff points TOWARD the direction wind is coming FROM
+  const theta = ((dirDeg - 90) * Math.PI) / 180;
+  const dx = Math.cos(theta);
+  const dy = Math.sin(theta);
+
+  const staffLen = 30;
+  // Start at the edge of the station circle so the barb is "attached"
+  const x0 = x + attachRadius * dx;
+  const y0 = y + attachRadius * dy;
+
+  // Staff end point
+  const x2 = x0 + staffLen * dx;
+  const y2 = y0 + staffLen * dy;
+
+  // Draw staff
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // Barb geometry: draw barbs on the "right" side of the staff
+  const px = Math.cos(theta + Math.PI / 2);
+  const py = Math.sin(theta + Math.PI / 2);
+
+  // Round to nearest 5 kt for standard barbs
+  let v = Math.round(spd / 5) * 5;
+
+  const n50 = Math.floor(v / 50);
+  v -= n50 * 50;
+  const n10 = Math.floor(v / 10);
+  v -= n10 * 10;
+  const n5 = v >= 5 ? 1 : 0;
+
+  // Start near the tip, move inward as we add barbs
+  let bx = x2;
+  let by = y2;
+  const calmCircleR = 6;
+  const step = 5;          // spacing between barbs along staff
+  const barbLen = 11;       // length of barb line
+  const flagLen = 12;      // length along staff for 50kt flag
+
+  // Helper to step back along the staff
+  const back = (dist: number) => {
+    bx -= dist * dx;
+    by -= dist * dy;
+  };
+
+  // 50-kt flags (filled triangles)
+  for (let i = 0; i < n50; i++) {
+    const fx1 = bx;
+    const fy1 = by;
+
+    const fx2 = bx - flagLen * dx;
+    const fy2 = by - flagLen * dy;
+
+    const fx3 = fx2 + barbLen * px;
+    const fy3 = fy2 + barbLen * py;
+
+    ctx.beginPath();
+    ctx.moveTo(fx1, fy1);
+    ctx.lineTo(fx2, fy2);
+    ctx.lineTo(fx3, fy3);
+    ctx.closePath();
+    ctx.fill();          // uses current fillStyle
+    ctx.stroke();
+
+    back(flagLen + 1);
+  }
+
+  // 10-kt full barbs
+  for (let i = 0; i < n10; i++) {
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + barbLen * px, by + barbLen * py);
+    ctx.stroke();
+    back(step);
+  }
+
+  // 5-kt half barb
+  if (n5) {
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + (barbLen * 0.5) * px, by + (barbLen * 0.5) * py);
+    ctx.stroke();
+  }
+}
+
 function App() {
   const [obs, setObs] = useState<SurfaceObs[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -111,10 +221,19 @@ function App() {
     latitude: 35.4,
     zoom: 6,
   });
+  const zoom = viewState.zoom ?? 0;
+  const plotDetail = useMemo(() => {
+    if (zoom < 5.5) return "low";
+    if (zoom < 7.5) return "medium";
+    return "high";
+  }, [zoom]);
   const [expandedStations, setExpandedStations] = useState<Set<string>>(new Set());
   const [selectedStation, setSelectedStation] = useState<SurfaceObs | null>(null);
   // Reference to the underlying MapLibre map instance
   const mapRef = useRef<MapRef | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
   const obsById = useMemo(() => {
     const m = new Map<string, SurfaceObs>();
     for (const s of obs) m.set(s.id, s);
@@ -192,6 +311,13 @@ function App() {
     return saved === "true";
   });
 
+  // Load display mode preference from localStorage, default to dots
+  type DisplayMode = "dots" | "plots";
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
+    const saved = localStorage.getItem("displayMode");
+    return (saved === "dots" || saved === "plots" ? saved : "dots") as DisplayMode;
+  });
+
   // Layer for displaying individual stations that are not part of a cluster
   const unclusteredLayer: any = {
     id: "unclustered",
@@ -206,6 +332,20 @@ function App() {
       "circle-color": colorCodeByFlightRule ? flightRuleColorExpr : "#111827",
     },
   };
+
+  // Invisible hit-target layer for plots mode (larger radius for easier clicking)
+  const hitTargetsLayer: any = useMemo(() => ({
+    id: "hit-targets",
+    type: "circle",
+    source: "stations",
+    filter: ["!", ["has", "point_count"]],
+    paint: {
+      "circle-radius": 12,                 // bigger = easier to click
+      "circle-color": "rgba(0,0,0,0)",     // fully transparent
+      "circle-stroke-color": "rgba(0,0,0,0)",
+      "circle-stroke-width": 0,
+    },
+  }), []);
 
   // GeoJSON data for the stations
   const stationsGeoJson = useMemo(() => {
@@ -262,6 +402,163 @@ function App() {
     return () => window.removeEventListener("keydown", handleEsc);
   }, [selectedStation]);
 
+  // Draw station plots on canvas overlay
+  const drawStationPlots = useCallback(() => {
+    // Only draw if in plots mode
+    if (displayMode !== "plots") return;
+    
+    const canvas = canvasRef.current;
+    const map = mapRef.current?.getMap();
+    if (!canvas || !map) return;
+    const zoom = map.getZoom();
+    const showNumbers = zoom >= 4; //temp/dewpoint numbers
+    const showPressure = zoom >= 5; //SLP code
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+
+    // Set canvas size accounting for devicePixelRatio
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Scale context for devicePixelRatio
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    // Draw each station in declutteredObs
+    for (const station of declutteredObs) {
+      try {
+        const point = map.project([station.lon, station.lat]);
+        
+        // Skip if outside viewport
+        if (point.x < -50 || point.x > width + 50 || point.y < -50 || point.y > height + 50) {
+          continue;
+        }
+
+        const x = point.x;
+        const y = point.y;
+        const radius = zoom < 7.5 ? 6 : 8;
+
+        // Calculate sky cover fill fraction
+        let maxFill = 0;
+        for (const sc of station.skyConditions) {
+          const fill = 
+            sc.cover === "OVC" ? 1.0 :
+            sc.cover === "BKN" ? 0.75 :
+            sc.cover === "SCT" ? 0.5 :
+            sc.cover === "FEW" ? 0.25 : 0;
+          maxFill = Math.max(maxFill, fill);
+        }
+
+        // Draw station circle outline
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Draw sky cover fill (wedge)
+        if (maxFill > 0) {
+          ctx.fillStyle = "rgba(148, 163, 184, 0.4)";
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.arc(x, y, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * maxFill);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Temperature (upper-left)
+        if (showNumbers) {
+          const temp = tempUnit === "F" 
+            ? Math.round(celsiusToFahrenheit(station.tempC))
+            : Math.round(station.tempC);
+          ctx.fillStyle = "#f87171";
+          ctx.font = "10px system-ui, sans-serif";
+          ctx.textAlign = "right";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(`${temp}`, x - radius - 2, y - radius - 2);
+
+          // Dewpoint (lower-left)
+          if (station.dewpointC !== null) {
+            const dewp = tempUnit === "F"
+              ? Math.round(celsiusToFahrenheit(station.dewpointC))
+              : Math.round(station.dewpointC);
+            ctx.fillStyle = "#4ade80";
+            ctx.textBaseline = "top";
+            ctx.fillText(`${dewp}`, x - radius - 2, y + radius + 2);
+          }
+        }
+
+        // SLP code (upper-right)
+        if (showPressure && station.pressureMb !== null) {
+          const slp = Math.round(station.pressureMb * 10) % 1000;
+          const slpStr = String(slp).padStart(3, "0");
+          ctx.fillStyle = "#000000";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(slpStr, x + radius + 2, y - radius - 2);
+        }
+
+        // Wind barb (to the right of circle)
+        if (station.windDirDeg !== null && station.windSpeedKt !== null) {
+          const windDir = station.windDirDeg;
+          const windSpeed = station.windSpeedKt;
+          // Wind barb (attached to circle edge)
+          ctx.strokeStyle = "#000000";
+          ctx.fillStyle = "#000000";
+          ctx.lineWidth = 1.5;
+          drawWindBarb(ctx, x, y, radius, station.windDirDeg, station.windSpeedKt);
+          ctx.lineWidth = 1; // reset if you want consistent width elsewhere
+        }
+      } catch (e) {
+        // Skip stations that can't be projected
+        continue;
+      }
+    }
+  }, [declutteredObs, tempUnit, viewState, displayMode]);
+
+  // Redraw canvas on map move/zoom/resize
+  useEffect(() => {
+    const redraw = () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      animationFrameRef.current = requestAnimationFrame(() => {
+        drawStationPlots();
+      });
+    };
+
+    if (!mapLoaded) return;
+
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+
+    map.on("move", redraw);
+    map.on("zoom", redraw);
+    map.on("resize", redraw);
+
+    // Initial draw
+    redraw();
+
+    return () => {
+      map.off("move", redraw);
+      map.off("zoom", redraw);
+      map.off("resize", redraw);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [drawStationPlots, mapLoaded]);
+
   const mapStyle = useMemo(
     () => "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
     []
@@ -277,6 +574,17 @@ function App() {
     const newValue = !colorCodeByFlightRule;
     setColorCodeByFlightRule(newValue);
     localStorage.setItem("colorCodeByFlightRule", String(newValue));
+  };
+
+  const toggleDisplayMode = () => {
+    const newMode: DisplayMode = displayMode === "dots" ? "plots" : "dots";
+    setDisplayMode(newMode);
+    localStorage.setItem("displayMode", newMode);
+  };
+
+  const setMode = (mode: MapRenderMode) => {
+    setRenderMode(mode);
+    localStorage.setItem("renderMode", mode);
   };
 
   const getFlightRuleColor = (flightRule: string): string => {
@@ -419,6 +727,15 @@ function App() {
           </div>
           <div className="header-controls">
             <button
+              className={`control-btn ${displayMode === "plots" ? "active" : ""}`}
+              onClick={toggleDisplayMode}
+              type="button"
+              aria-label="Toggle display mode"
+              title="Toggle between dots and plots display"
+            >
+              {displayMode === "dots" ? "Dots" : "Plots"}
+            </button>
+            <button
               className={`control-btn ${colorCodeByFlightRule ? "active" : ""}`}
               onClick={toggleColorCodeByFlightRule}
               type="button"
@@ -444,7 +761,23 @@ function App() {
       <main className="app-main">
         <section className="map-panel">
           <div className="map-container">
+            {displayMode === "plots" && (
+              <canvas
+                ref={canvasRef}
+                className="station-plot-canvas"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                  zIndex: 10,
+                }}
+              />
+            )}
             <MapGL
+              onLoad={() => setMapLoaded(true)}
               ref={mapRef}
               reuseMaps
               mapLib={maplibregl}
@@ -454,14 +787,17 @@ function App() {
               maxZoom={12}
               mapStyle={mapStyle}
               attributionControl={true}
-              interactiveLayerIds={["unclustered"]}
+              interactiveLayerIds={displayMode === "plots" ? ["hit-targets"] : ["unclustered"]}
               onClick={(e) => {
                 const map = mapRef.current?.getMap();
                 if (!map) return;
 
-                const features = map.queryRenderedFeatures(e.point, {
-                  layers: ["unclustered"],
-                });
+                const layers =
+                  displayMode === "plots"
+                    ? ["hit-targets"]
+                    : ["unclustered"];
+
+                const features = map.queryRenderedFeatures(e.point, { layers });
 
                 const f = features?.[0];
                 if (!f) return;
@@ -477,15 +813,18 @@ function App() {
 
                 console.log("clicked station", id);
                 console.log("clicked obsTimeUtc:", station?.obsTimeUtc);
+                console.log("drawing plots", declutteredObs.length);
               }}
             >
               <NavigationControl position="top-left" />
-              <Source
-                id="stations"
-                type="geojson"
-                data={stationsGeoJson}
-              >
-                <Layer {...unclusteredLayer} />
+              <Source id="stations" type="geojson" data={stationsGeoJson}>
+                {displayMode === "dots" && (
+                  <Layer {...unclusteredLayer} key="dots-layer" />
+                )}
+
+                {displayMode === "plots" && (
+                  <Layer {...hitTargetsLayer} key="hit-layer" />
+                )}
               </Source>
             </MapGL>
           </div>
