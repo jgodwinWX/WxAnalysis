@@ -240,6 +240,25 @@ function App() {
     return m;
   }, [obs]);
 
+  type DensityMode = "sparse" | "medium" | "dense";
+
+  const [densityMode, setDensityMode] = useState<DensityMode>(() => {
+    const saved = localStorage.getItem("densityMode");
+    return saved === "sparse" || saved === "medium" || saved === "dense" ? saved : "medium";
+  });
+
+  const densityMultiplier = useMemo(() => {
+    switch (densityMode) {
+      case "dense":
+        return 0.50;
+      case "sparse":
+        return 3.0;
+      case "medium":
+      default:
+        return 2.0;
+    }
+  }, [densityMode]);
+
   // Thin the stations by a pixel grid to reduce the number of points on the map
   const declutteredObs = useMemo(() => {
     const map = mapRef.current?.getMap();
@@ -247,37 +266,27 @@ function App() {
   
     const z = viewState.zoom ?? 0;
   
-    // Bigger cells = fewer stations. Tune these numbers to taste.
-    const cell =
+    // Base cell size by zoom (pixels). Bigger cells = fewer stations.
+    const baseCell =
       z < 4 ? 30 :
       z < 6 ? 22 :
       z < 8 ? 15 :
       z < 10 ? 10 :
       0;
   
-    if (cell === 0) return obs;
+    if (baseCell === 0) return obs;
+  
+    // Apply user density selection
+    const cell = Math.max(6, Math.round(baseCell * densityMultiplier));
+  
     return thinByPixelGrid(obs, map, cell);
-  }, [obs, viewState.longitude, viewState.latitude, viewState.zoom]);
-
-  // Cluster layer for areas with dense station clusters
-  const clusterLayer: any = {
-    id: "clusters",
-    type: "circle",
-    source: "stations",
-    filter: ["has", "point_count"],
-    paint: {
-      "circle-opacity": 0.65,
-      "circle-color": [
-        "step",
-        ["get", "point_count"],
-        "#6b7280",   // small clusters
-        50, "#4b5563",
-        200, "#374151",
-        1000, "#111827"
-      ],
-      "circle-radius": ["step", ["get", "point_count"], 16, 50, 20, 200, 26, 1000, 32],
-    },
-  };
+  }, [
+    obs,
+    densityMultiplier,
+    viewState.longitude,
+    viewState.latitude,
+    viewState.zoom,
+  ]);
   
   // Layer for displaying the number of stations in each cluster
   const clusterCountLayer: any = {
@@ -310,6 +319,23 @@ function App() {
     const saved = localStorage.getItem("colorCodeByFlightRule");
     return saved === "true";
   });
+  
+  useEffect(() => {
+    localStorage.setItem("densityMode", densityMode);
+  }, [densityMode]);
+
+const densityPx = useMemo(() => {
+  // minimum spacing (pixels) between plotted stations
+  switch (densityMode) {
+    case "dense":
+      return 55;
+    case "sparse":
+      return 110;
+    case "medium":
+    default:
+      return 80;
+  }
+}, [densityMode]);
 
   // Load display mode preference from localStorage, default to dots
   type DisplayMode = "plots" | "dots";
@@ -732,6 +758,18 @@ function App() {
             <p>Prototype mesoanalysis dashboard (surface obs layer)</p>
           </div>
           <div className="header-controls">
+          <div className="density-control">
+            <div className="density-title">Obs Density</div>
+            <select
+              className="density-select"
+              value={densityMode}
+              onChange={(e) => setDensityMode(e.target.value as DensityMode)}
+            >
+              <option value="sparse">Sparse</option>
+              <option value="medium">Medium</option>
+              <option value="dense">Dense</option>
+            </select>
+          </div>
           <div className="surface-obs-control">
             <div className="surface-obs-title">Surface Observations</div>
             <select

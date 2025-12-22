@@ -79,6 +79,30 @@
   gap: 4px;
 }
 
+.density-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.density-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.density-select {
+  background: rgba(15, 23, 42, 0.85);
+  color: #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.875rem;
+}
+
 .surface-obs-title {
   font-size: 0.9rem;        /* larger than body text */
   font-weight: 600;
