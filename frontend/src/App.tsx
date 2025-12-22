@@ -312,11 +312,17 @@ function App() {
   });
 
   // Load display mode preference from localStorage, default to dots
-  type DisplayMode = "dots" | "plots";
+  type DisplayMode = "plots" | "dots";
+
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
     const saved = localStorage.getItem("displayMode");
-    return (saved === "dots" || saved === "plots" ? saved : "dots") as DisplayMode;
+    return saved === "dots" || saved === "plots" ? (saved as DisplayMode) : "plots";
   });
+  
+  const setSurfaceObsMode = (mode: DisplayMode) => {
+    setDisplayMode(mode);
+    localStorage.setItem("displayMode", mode);
+  };
 
   // Layer for displaying individual stations that are not part of a cluster
   const unclusteredLayer: any = {
@@ -726,24 +732,17 @@ function App() {
             <p>Prototype mesoanalysis dashboard (surface obs layer)</p>
           </div>
           <div className="header-controls">
-            <button
-              className={`control-btn ${displayMode === "plots" ? "active" : ""}`}
-              onClick={toggleDisplayMode}
-              type="button"
-              aria-label="Toggle display mode"
-              title="Toggle between dots and plots display"
+          <div className="surface-obs-control">
+            <div className="surface-obs-title">Surface Observations</div>
+            <select
+              className="surface-obs-select"
+              value={displayMode}
+              onChange={(e) => setSurfaceObsMode(e.target.value as DisplayMode)}
             >
-              {displayMode === "dots" ? "Dots" : "Plots"}
-            </button>
-            <button
-              className={`control-btn ${colorCodeByFlightRule ? "active" : ""}`}
-              onClick={toggleColorCodeByFlightRule}
-              type="button"
-              aria-label="Toggle flight rule color coding"
-              title="Color code map labels by flight rule"
-            >
-              Flight Rules
-            </button>
+              <option value="plots">Station Plots</option>
+              <option value="dots">Colored Flight Rule</option>
+            </select>
+          </div>
             <button
               className={`temp-toggle-btn ${tempUnit === "F" ? "active" : ""}`}
               onClick={toggleTempUnit}

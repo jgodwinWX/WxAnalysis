@@ -39,7 +39,7 @@
 .header-controls {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 16px;
 }
 
 .temp-toggle-container {
@@ -70,6 +70,54 @@
   border-color: rgba(59, 130, 246, 0.5);
   color: #60a5fa;
   font-weight: 600;
+}
+
+.surface-obs-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.surface-obs-title {
+  font-size: 0.9rem;        /* larger than body text */
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #e5e7eb;           /* light slate */
+  opacity: 0.9;
+}
+
+.surface-obs-select {
+  background: rgba(15, 23, 42, 0.85);
+  color: #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.surface-obs-menu {
+  width: max-content;
+}
+
+.surface-obs-label {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.surface-obs-select {
+  appearance: none;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.55);
+  color: white;
+  font-size: 14px;
+  outline: none;
+}
+
+.surface-obs-select:focus {
+  border-color: rgba(96, 165, 250, 0.7);
 }
 
 .temp-toggle-btn {
@@ -147,6 +195,16 @@
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.2);
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.08);
+}
+
+.maplibregl-ctrl-top-left {
+  left: 0 !important;
+  right: auto !important;
+}
+
+.maplibregl-ctrl-top-right {
+  right: 0 !important;
+  left: auto !important;
 }
 
 .station-plot-canvas {
