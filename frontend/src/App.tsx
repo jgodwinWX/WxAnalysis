@@ -54,6 +54,10 @@ function thinByPixelGrid(
   return out;
 }
 
+function getMapOrNull(mapRef: React.RefObject<MapRef | null>): maplibregl.Map | null {
+  return mapRef.current?.getMap?.() ?? null;
+}
+
 // Compute the number of minutes ago that an observation was made
 function minutesAgo(iso: string | null): number | null {
   if (!iso) return null;
@@ -216,22 +220,26 @@ function App() {
   const [obs, setObs] = useState<SurfaceObs[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [viewState, setViewState] = useState<Partial<ViewState>>({
+  const [viewState, setViewState] = useState<ViewState>({
     longitude: -97.6,
     latitude: 35.4,
     zoom: 6,
+    bearing: 0,
+    pitch: 0,
+    padding: { top: 0, left: 0, bottom: 0, right: 0 },
   });
-  const zoom = viewState.zoom ?? 0;
   const plotDetail = useMemo(() => {
-    if (zoom < 5.5) return "low";
-    if (zoom < 7.5) return "medium";
+    if (viewState.zoom && viewState.zoom < 5.5) return "low";
+    if (viewState.zoom && viewState.zoom < 7.5) return "medium";
     return "high";
-  }, [zoom]);
+  }, [viewState.zoom]);
   const [expandedStations, setExpandedStations] = useState<Set<string>>(new Set());
   const [selectedStation, setSelectedStation] = useState<SurfaceObs | null>(null);
   // Reference to the underlying MapLibre map instance
   const mapRef = useRef<MapRef | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const analysisLabelCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const obsById = useMemo(() => {
@@ -250,9 +258,9 @@ function App() {
   const densityMultiplier = useMemo(() => {
     switch (densityMode) {
       case "dense":
-        return 0.50;
+        return 0.25;
       case "sparse":
-        return 3.0;
+        return 4.0;
       case "medium":
       default:
         return 2.0;
@@ -260,13 +268,12 @@ function App() {
   }, [densityMode]);
 
   // Thin the stations by a pixel grid to reduce the number of points on the map
-  const declutteredObs = useMemo(() => {
-    const map = mapRef.current?.getMap();
-    if (!map) return obs;
+  const declutteredObs = useMemo<SurfaceObs[]>(() => {
+    const map = getMapOrNull(mapRef);
+    if (!map) return obs; // <- IMPORTANT: return obs, not undefined
   
     const z = viewState.zoom ?? 0;
   
-    // Base cell size by zoom (pixels). Bigger cells = fewer stations.
     const baseCell =
       z < 4 ? 30 :
       z < 6 ? 22 :
@@ -276,17 +283,9 @@ function App() {
   
     if (baseCell === 0) return obs;
   
-    // Apply user density selection
     const cell = Math.max(6, Math.round(baseCell * densityMultiplier));
-  
     return thinByPixelGrid(obs, map, cell);
-  }, [
-    obs,
-    densityMultiplier,
-    viewState.longitude,
-    viewState.latitude,
-    viewState.zoom,
-  ]);
+  }, [obs, densityMultiplier, viewState.longitude, viewState.latitude, viewState.zoom]);
   
   // Layer for displaying the number of stations in each cluster
   const clusterCountLayer: any = {
@@ -381,15 +380,13 @@ const densityPx = useMemo(() => {
 
   // GeoJSON data for the stations
   const stationsGeoJson = useMemo(() => {
+    const list = declutteredObs ?? [];
     return {
       type: "FeatureCollection",
-      features: declutteredObs.map((s) => ({
+      features: list.map((s) => ({
         type: "Feature",
         geometry: { type: "Point", coordinates: [s.lon, s.lat] },
-        properties: {
-          id: s.id,
-          flightRule: s.flightRule,
-        },
+        properties: { id: s.id, flightRule: s.flightRule },
       })),
     } as any;
   }, [declutteredObs]);
@@ -434,13 +431,52 @@ const densityPx = useMemo(() => {
     return () => window.removeEventListener("keydown", handleEsc);
   }, [selectedStation]);
 
+  function lerp(a: number, b: number, t: number) {
+    return a + (b - a) * t;
+  }
+  
+  function clamp01(x: number) {
+    return Math.max(0, Math.min(1, x));
+  }
+  
+  // Simple temperature ramp (in °F): blue -> cyan -> green -> yellow -> orange -> red
+  function tempToRgbaF(tempF: number, alpha: number): string {
+    // Tune range to taste:
+    const tMin = 0;
+    const tMax = 100;
+    const t = clamp01((tempF - tMin) / (tMax - tMin));
+  
+    // piecewise stops
+    const stops = [
+      { t: 0.0, c: [30, 64, 175] },   // deep blue
+      { t: 0.2, c: [56, 189, 248] },  // cyan
+      { t: 0.4, c: [74, 222, 128] },  // green
+      { t: 0.6, c: [250, 204, 21] },  // yellow
+      { t: 0.8, c: [251, 146, 60] },  // orange
+      { t: 1.0, c: [239, 68, 68] },   // red
+    ];
+  
+    let i = 0;
+    while (i < stops.length - 1 && t > stops[i + 1].t) i++;
+  
+    const a = stops[i];
+    const b = stops[Math.min(i + 1, stops.length - 1)];
+    const localT = (t - a.t) / Math.max(1e-9, (b.t - a.t));
+  
+    const r = Math.round(lerp(a.c[0], b.c[0], localT));
+    const g = Math.round(lerp(a.c[1], b.c[1], localT));
+    const bl = Math.round(lerp(a.c[2], b.c[2], localT));
+  
+    return `rgba(${r}, ${g}, ${bl}, ${alpha})`;
+  }
+  
   // Draw station plots on canvas overlay
   const drawStationPlots = useCallback(() => {
     // Only draw if in plots mode
     if (displayMode !== "plots") return;
     
     const canvas = canvasRef.current;
-    const map = mapRef.current?.getMap();
+    const map = getMapOrNull(mapRef);
     if (!canvas || !map) return;
     const zoom = map.getZoom();
     const showNumbers = zoom >= 4; //temp/dewpoint numbers
@@ -614,11 +650,6 @@ const densityPx = useMemo(() => {
     localStorage.setItem("displayMode", newMode);
   };
 
-  const setMode = (mode: MapRenderMode) => {
-    setRenderMode(mode);
-    localStorage.setItem("renderMode", mode);
-  };
-
   const getFlightRuleColor = (flightRule: string): string => {
     const rule = flightRule.toUpperCase();
     switch (rule) {
@@ -749,6 +780,463 @@ const densityPx = useMemo(() => {
     return directions[index];
   };
 
+  type AnalysisOverlay = "temp" | "dewpoint" | "slp";
+  type AnalysisOverlaySet = Record<AnalysisOverlay, boolean>;
+  
+  const [analysisOverlays, setAnalysisOverlays] = useState<AnalysisOverlaySet>(() => {
+    const saved = localStorage.getItem("analysisOverlays");
+    if (saved) {
+      try {
+        const obj = JSON.parse(saved) as Partial<AnalysisOverlaySet>;
+        return {
+          temp: !!obj.temp,
+          dewpoint: !!obj.dewpoint,
+          slp: !!obj.slp,
+        };
+      } catch {}
+    }
+    return { temp: true, dewpoint: false, slp: false };
+  });
+  
+  const anyOverlayOn = analysisOverlays.temp || analysisOverlays.dewpoint || analysisOverlays.slp;
+
+const [analysisOpacity, setAnalysisOpacity] = useState<number>(() => {
+  const saved = localStorage.getItem("analysisOpacity");
+  const v = saved ? Number(saved) : 0.6;
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.6;
+});
+
+type Pt = { x: number; y: number };
+
+function interp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+// Marching squares for one contour level.
+// gridVals is row-major: gridVals[j * nx + i]
+function contoursForLevel(
+  gridVals: Float32Array,
+  nx: number,
+  ny: number,
+  step: number,
+  level: number
+): Pt[][] {
+  const lines: Pt[][] = [];
+
+  const idx = (i: number, j: number) => j * nx + i;
+
+  for (let j = 0; j < ny - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const v0 = gridVals[idx(i, j)];
+      const v1 = gridVals[idx(i + 1, j)];
+      const v2 = gridVals[idx(i + 1, j + 1)];
+      const v3 = gridVals[idx(i, j + 1)];
+
+      // Skip cells with missing data
+      if (!Number.isFinite(v0) || !Number.isFinite(v1) || !Number.isFinite(v2) || !Number.isFinite(v3)) {
+        continue;
+      }
+
+      // bitmask: 1,2,4,8 for corners >= level
+      let c = 0;
+      if (v0 >= level) c |= 1;
+      if (v1 >= level) c |= 2;
+      if (v2 >= level) c |= 4;
+      if (v3 >= level) c |= 8;
+
+      if (c === 0 || c === 15) continue;
+
+      const x = i * step;
+      const y = j * step;
+
+      // Edge interpolation helpers (avoid divide by zero)
+      const t01 = (level - v0) / (v1 - v0 || 1e-9);
+      const t12 = (level - v1) / (v2 - v1 || 1e-9);
+      const t23 = (level - v2) / (v3 - v2 || 1e-9);
+      const t30 = (level - v3) / (v0 - v3 || 1e-9);
+
+      const p01: Pt = { x: x + interp(0, step, t01), y: y };
+      const p12: Pt = { x: x + step, y: y + interp(0, step, t12) };
+      const p23: Pt = { x: x + interp(step, 0, t23), y: y + step };
+      const p30: Pt = { x: x, y: y + interp(step, 0, t30) };
+
+      // Cases as line segments. (We return short segments; that’s fine for v1.)
+      // If you want joined polylines later, we can stitch segments.
+      switch (c) {
+        case 1:  lines.push([p30, p01]); break;
+        case 2:  lines.push([p01, p12]); break;
+        case 3:  lines.push([p30, p12]); break;
+        case 4:  lines.push([p12, p23]); break;
+        case 5:  lines.push([p30, p23], [p01, p12]); break; // ambiguous saddle
+        case 6:  lines.push([p01, p23]); break;
+        case 7:  lines.push([p30, p23]); break;
+        case 8:  lines.push([p23, p30]); break;
+        case 9:  lines.push([p01, p23]); break;
+        case 10: lines.push([p01, p30], [p12, p23]); break; // ambiguous saddle
+        case 11: lines.push([p12, p23]); break;
+        case 12: lines.push([p12, p30]); break;
+        case 13: lines.push([p01, p12]); break;
+        case 14: lines.push([p30, p01]); break;
+      }
+    }
+  }
+
+  return lines;
+}
+
+function strokeIsotherms(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][],
+  level: number,
+  freezingLevel: number
+) {
+  const belowFreezing = level < freezingLevel;
+  const isFreezing = Math.abs(level - freezingLevel) < 1e-6;
+
+  ctx.save();
+
+  if (isFreezing) {
+    ctx.strokeStyle = "#0000ff"; // dark blue
+    ctx.lineWidth = 2.6;
+    ctx.setLineDash([]); // solid
+  } else if (belowFreezing) {
+    ctx.strokeStyle = "#2563eb"; // blue
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([6, 5]); // dashed
+  } else {
+    ctx.strokeStyle = "#dc2626"; // dark
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([6, 5]); // dashed
+  }
+
+  for (const seg of segments) {
+    ctx.beginPath();
+    ctx.moveTo(seg[0].x, seg[0].y);
+    for (let k = 1; k < seg.length; k++) ctx.lineTo(seg[k].x, seg[k].y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function strokeIsodrosotherms(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][],
+  level: number
+) {
+  ctx.save();
+  ctx.strokeStyle = "#14532d"; // dark green
+  ctx.lineWidth = 1.6;
+  ctx.setLineDash([2, 6]); // dotted-ish (tweak: [2,6] if too faint)
+
+  for (const seg of segments) {
+    if (!seg) continue;
+    ctx.beginPath();
+    ctx.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].x, seg[i].y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function strokeIsobars(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][],
+  level: number
+) {
+  ctx.save();
+  ctx.strokeStyle = "#000000";
+  ctx.lineWidth = 2.6;
+  ctx.setLineDash([]); // solid
+
+  for (const seg of segments) {
+    if (!seg || seg.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].x, seg[i].y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+type LabelMode = "temp" | "dewpoint" | "slp";
+
+function labelContours(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][],
+  level: number,
+  mode: LabelMode,
+  opts: { tempUnit: "F" | "C"; freezingLevel?: number }
+) {
+  const tempUnit = opts.tempUnit;
+  const freezingLevel = opts.freezingLevel ?? (tempUnit === "F" ? 32 : 0);
+
+  // Color/text by mode
+  let labelColor = "#111827";
+  let text = "";
+
+  if (mode === "temp") {
+    const belowFreezing = level < freezingLevel;
+    const isFreezing = Math.abs(level - freezingLevel) < 1e-6;
+    labelColor = isFreezing ? "#111827" : belowFreezing ? "#2563eb" : "#dc2626";
+    text = `${Math.round(level)}°${tempUnit}`;
+  } else if (mode === "dewpoint") {
+    labelColor = "#14532d";
+    text = `${Math.round(level)}°${tempUnit}`;
+  } else {
+    // slp
+    labelColor = "#111827";
+    text = `${Math.round(level)}`; // mb
+  }
+
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.setLineDash([]);
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  const maxLabels = 5;
+  const minLen = 30;
+
+  // Build candidates from segment endpoints
+  const candidates: Array<{ a: Pt; b: Pt; len: number }> = [];
+  for (const seg of segments) {
+    if (!seg || seg.length < 2) continue;
+    const a = seg[0];
+    const b = seg[seg.length - 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len >= minLen) candidates.push({ a, b, len });
+  }
+  if (candidates.length === 0) {
+    ctx.restore();
+    return;
+  }
+
+  candidates.sort((a, b) => b.len - a.len);
+
+  for (let i = 0; i < candidates.length && i < maxLabels; i++) {
+    const { a, b } = candidates[i];
+
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+
+    let angle = Math.atan2(dy, dx);
+    if (angle > Math.PI / 2) angle -= Math.PI;
+    else if (angle < -Math.PI / 2) angle += Math.PI;
+
+    ctx.save();
+    ctx.translate(mx, my);
+    ctx.rotate(angle);
+
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.strokeText(text, 0, 0);
+
+    ctx.fillStyle = labelColor;
+    ctx.fillText(text, 0, 0);
+
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+// Draw the analysis overlay on the canvas
+const drawAnalysisOverlay = useCallback(() => {
+  if (!anyOverlayOn) return;
+
+  const canvas = analysisCanvasRef.current;
+  const mapObj = mapRef.current?.getMap();
+  if (!canvas || !mapObj) return;
+
+  const map = mapObj;
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+
+  canvas.width = Math.max(1, Math.round(width * dpr));
+  canvas.height = Math.max(1, Math.round(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  const ctx0 = canvas.getContext("2d");
+  if (!ctx0) return;
+  const ctx = ctx0;
+
+  // Work in CSS pixel space
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.globalAlpha = analysisOpacity;
+
+  // Use declutteredObs as requested
+  const stations = declutteredObs;
+  if (!stations || stations.length === 0) return;
+
+  // Performance knobs (contours are heavier than shading)
+  const step = 24;          // grid spacing in pixels; 20–32 is typical
+  const power = 2;
+  const maxRadius = 200;    // px search radius
+  const maxRadius2 = maxRadius * maxRadius;
+  const kMax = 10;
+
+  function drawOne(mode: AnalysisOverlay) {
+    // Build pts for THIS field
+    const pts: Array<{ x: number; y: number; val: number }> = [];
+    for (const s of declutteredObs) {
+      const p = map.project([s.lon, s.lat]);
+  
+      if (mode === "temp") {
+        if (s.tempC == null) continue;
+        const val = tempUnit === "F" ? celsiusToFahrenheit(s.tempC) : s.tempC;
+        pts.push({ x: p.x, y: p.y, val });
+      } else if (mode === "dewpoint") {
+        if (s.dewpointC == null) continue;
+        const val = tempUnit === "F" ? celsiusToFahrenheit(s.dewpointC) : s.dewpointC;
+        pts.push({ x: p.x, y: p.y, val });
+      } else if (mode === "slp") {
+        if (s.pressureMb == null) continue;
+        pts.push({ x: p.x, y: p.y, val: s.pressureMb });
+      }
+    }
+    if (pts.length < 3) return;
+  
+    // Build gridVals (same as your existing code, but using pts)
+    const nx = Math.floor(width / step) + 1;
+    const ny = Math.floor(height / step) + 1;
+    const gridVals = new Float32Array(nx * ny);
+    gridVals.fill(Number.NaN);
+  
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const gx = i * step;
+        const gy = j * step;
+  
+        const neighbors: Array<{ d2: number; val: number }> = [];
+        for (const p of pts) {
+          const dx = p.x - gx;
+          const dy = p.y - gy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > maxRadius2) continue;
+  
+          let inserted = false;
+          for (let k = 0; k < neighbors.length; k++) {
+            if (d2 < neighbors[k].d2) {
+              neighbors.splice(k, 0, { d2, val: p.val });
+              inserted = true;
+              break;
+            }
+          }
+          if (!inserted) neighbors.push({ d2, val: p.val });
+          if (neighbors.length > kMax) neighbors.pop();
+        }
+  
+        if (neighbors.length < 3) continue;
+  
+        let wSum = 0;
+        let vSum = 0;
+        for (const n of neighbors) {
+          const w = 1 / Math.pow(Math.max(n.d2, 9), power / 2);
+          wSum += w;
+          vSum += w * n.val;
+        }
+        if (wSum <= 0) continue;
+  
+        gridVals[j * nx + i] = vSum / wSum;
+      }
+    }
+  
+    // min/max
+    let minV = Infinity, maxV = -Infinity;
+    for (let k = 0; k < gridVals.length; k++) {
+      const v = gridVals[k];
+      if (!Number.isFinite(v)) continue;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    if (!Number.isFinite(minV) || !Number.isFinite(maxV)) return;
+  
+    // build levels
+    const levels: number[] = [];
+    const freezingLevel = tempUnit === "F" ? 32 : 0;
+  
+    if (mode === "temp") {
+      const interval = tempUnit === "F" ? 5 : 2;
+      const start = Math.floor(minV / interval) * interval;
+      const end = Math.ceil(maxV / interval) * interval;
+      for (let v = start; v <= end; v += interval) levels.push(v);
+    } else if (mode === "dewpoint") {
+      const dpThreshold = tempUnit === "F" ? 45 : 8;
+      const dpStep = tempUnit === "F" ? 5 : 2;
+      const start = Math.floor(minV / dpStep) * dpStep;
+      const end = Math.ceil(maxV / dpStep) * dpStep;
+      for (let v = start; v <= end; v += dpStep) if (v >= dpThreshold) levels.push(v);
+    } else if (mode === "slp") {
+      const base = 1000;
+      const stepMb = 4;
+      const kStart = Math.floor((minV - base) / stepMb);
+      const kEnd = Math.ceil((maxV - base) / stepMb);
+      for (let k = kStart; k <= kEnd; k++) levels.push(base + k * stepMb);
+    }
+  
+    // draw
+    for (const level of levels) {
+      const segments = contoursForLevel(gridVals, nx, ny, step, level);
+      if (segments.length === 0) continue;
+  
+      if (mode === "temp") {
+        strokeIsotherms(ctx, segments, level, freezingLevel);
+        labelContours(ctx, segments, level, "temp", { tempUnit, freezingLevel });
+      } else if (mode === "dewpoint") {
+        strokeIsodrosotherms(ctx, segments, level);
+        labelContours(ctx, segments, level, "dewpoint", { tempUnit });
+      } else {
+        strokeIsobars(ctx, segments, level);
+        labelContours(ctx, segments, level, "slp", { tempUnit });
+      }
+    }
+  
+    // emphasize freezing line
+    if (mode === "temp") {
+      const freezeSegs = contoursForLevel(gridVals, nx, ny, step, freezingLevel);
+      if (freezeSegs.length) {
+        const prev = ctx.globalAlpha;
+        ctx.globalAlpha = Math.min(1, analysisOpacity + 0.2);
+        strokeIsotherms(ctx, freezeSegs, freezingLevel, freezingLevel);
+        ctx.globalAlpha = prev;
+      }
+    }
+  };
+
+    // draw order: pressure under, dewpoint, then temp on top
+    if (analysisOverlays.slp) drawOne("slp");
+    if (analysisOverlays.dewpoint) drawOne("dewpoint");
+    if (analysisOverlays.temp) drawOne("temp");
+  
+    ctx.globalAlpha = 1;
+}, [analysisOverlays, analysisOpacity, declutteredObs, tempUnit, anyOverlayOn]);
+
+useEffect(() => {
+  if (!mapLoaded) return;
+  if (!anyOverlayOn) return;
+  drawAnalysisOverlay();
+}, [mapLoaded, anyOverlayOn, drawAnalysisOverlay]);
+
+useEffect(() => {
+  localStorage.setItem("analysisOverlays", JSON.stringify(analysisOverlays));
+}, [analysisOverlays]);
+
+useEffect(() => {
+  localStorage.setItem("analysisOpacity", String(analysisOpacity));
+}, [analysisOpacity]);
+
   return (
     <div className="app-root">
       <header className="app-header">
@@ -757,30 +1245,77 @@ const densityPx = useMemo(() => {
             <h1>Wx Mesoanalysis</h1>
             <p>Prototype mesoanalysis dashboard (surface obs layer)</p>
           </div>
+          </div>
+          </header>
           <div className="header-controls">
-          <div className="density-control">
-            <div className="density-title">Obs Density</div>
-            <select
-              className="density-select"
-              value={densityMode}
-              onChange={(e) => setDensityMode(e.target.value as DensityMode)}
-            >
-              <option value="sparse">Sparse</option>
-              <option value="medium">Medium</option>
-              <option value="dense">Dense</option>
-            </select>
-          </div>
-          <div className="surface-obs-control">
-            <div className="surface-obs-title">Surface Observations</div>
-            <select
-              className="surface-obs-select"
-              value={displayMode}
-              onChange={(e) => setSurfaceObsMode(e.target.value as DisplayMode)}
-            >
-              <option value="plots">Station Plots</option>
-              <option value="dots">Colored Flight Rule</option>
-            </select>
-          </div>
+            <div className="density-control">
+              <div className="density-title">Obs Density</div>
+              <select
+                className="density-select"
+                value={densityMode}
+                onChange={(e) => setDensityMode(e.target.value as DensityMode)}
+              >
+                <option value="sparse">Sparse</option>
+                <option value="medium">Medium</option>
+                <option value="dense">Dense</option>
+              </select>
+            </div>
+            <div className="surface-obs-control">
+              <div className="surface-obs-title">Surface Observations</div>
+              <select
+                className="surface-obs-select"
+                value={displayMode}
+                onChange={(e) => setSurfaceObsMode(e.target.value as DisplayMode)}
+              >
+                <option value="plots">Station Plots</option>
+                <option value="dots">Colored Flight Rule</option>
+              </select>
+            </div>
+            <div className="analysis-control">
+          <div className="analysis-title">Objective Analysis</div>
+
+  <label>
+    <input
+      type="checkbox"
+      checked={analysisOverlays.temp}
+      onChange={(e) => setAnalysisOverlays(s => ({ ...s, temp: e.target.checked }))}
+    />
+    Isotherms (Temp)
+  </label>
+
+  <label>
+    <input
+      type="checkbox"
+      checked={analysisOverlays.dewpoint}
+      onChange={(e) => setAnalysisOverlays(s => ({ ...s, dewpoint: e.target.checked }))}
+    />
+    Isodrosotherms (Dewpoint)
+  </label>
+
+  <label>
+    <input
+      type="checkbox"
+      checked={analysisOverlays.slp}
+      onChange={(e) => setAnalysisOverlays(s => ({ ...s, slp: e.target.checked }))}
+    />
+    Isobars (SLP)
+  </label>
+
+  {anyOverlayOn && (
+    <div className="analysis-opacity">
+      <span className="analysis-opacity-label">Opacity</span>
+      <input
+        className="analysis-opacity-slider"
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={analysisOpacity}
+        onChange={(e) => setAnalysisOpacity(Number(e.target.value))}
+      />
+    </div>
+  )}
+</div>
             <button
               className={`temp-toggle-btn ${tempUnit === "F" ? "active" : ""}`}
               onClick={toggleTempUnit}
@@ -792,12 +1327,26 @@ const densityPx = useMemo(() => {
               <span>°C</span>
             </button>
           </div>
-        </div>
-      </header>
 
       <main className="app-main">
         <section className="map-panel">
           <div className="map-container">
+            {anyOverlayOn && (
+              <canvas
+                ref={analysisCanvasRef}
+                className="analysis-canvas"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                  zIndex: 15, // below station plots (10), above map
+                }}
+              />
+            )}
+
             {displayMode === "plots" && (
               <canvas
                 ref={canvasRef}
@@ -813,6 +1362,23 @@ const densityPx = useMemo(() => {
                 }}
               />
             )}
+
+            {anyOverlayOn && (
+              <canvas
+                ref={analysisLabelCanvasRef}
+                className="analysis-label-canvas"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                  zIndex: 30, // ABOVE station plots
+                }}
+              />
+            )}
+
             <MapGL
               onLoad={() => setMapLoaded(true)}
               ref={mapRef}
