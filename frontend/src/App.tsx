@@ -23,6 +23,7 @@ type SurfaceObs = {
   skyConditions: SkyCondition[];
   altimeterInhg: number | null;
   pressureMb: number | null;
+  pressureIsEstimated?: boolean;
   relativeHumidity: number | null;
   weatherCodes: string | null;
   flightRule: string;
@@ -473,6 +474,7 @@ const densityPx = useMemo(() => {
   // Draw station plots on canvas overlay
   const drawStationPlots = useCallback(() => {
     // Only draw if in plots mode
+    if (!showStations) return;
     if (displayMode !== "plots") return;
     
     const canvas = canvasRef.current;
@@ -800,12 +802,6 @@ const densityPx = useMemo(() => {
   
   const anyOverlayOn = analysisOverlays.temp || analysisOverlays.dewpoint || analysisOverlays.slp;
 
-const [analysisOpacity, setAnalysisOpacity] = useState<number>(() => {
-  const saved = localStorage.getItem("analysisOpacity");
-  const v = saved ? Number(saved) : 0.6;
-  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.6;
-});
-
 type Pt = { x: number; y: number };
 
 function interp(a: number, b: number, t: number) {
@@ -927,7 +923,7 @@ function strokeIsodrosotherms(
   ctx.save();
   ctx.strokeStyle = "#14532d"; // dark green
   ctx.lineWidth = 1.6;
-  ctx.setLineDash([2, 6]); // dotted-ish (tweak: [2,6] if too faint)
+  ctx.setLineDash([5, 6]); // dotted-ish (tweak: [2,6] if too faint)
 
   for (const seg of segments) {
     if (!seg) continue;
@@ -962,7 +958,6 @@ function strokeIsobars(
 }
 
 type LabelMode = "temp" | "dewpoint" | "slp";
-
 function labelContours(
   ctx: CanvasRenderingContext2D,
   segments: Pt[][],
@@ -1074,7 +1069,8 @@ const drawAnalysisOverlay = useCallback(() => {
   // Work in CSS pixel space
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
-  ctx.globalAlpha = analysisOpacity;
+  const ANALYSIS_ALPHA = 0.6;
+  ctx.globalAlpha = ANALYSIS_ALPHA;
 
   // Use declutteredObs as requested
   const stations = declutteredObs;
@@ -1208,7 +1204,7 @@ const drawAnalysisOverlay = useCallback(() => {
       const freezeSegs = contoursForLevel(gridVals, nx, ny, step, freezingLevel);
       if (freezeSegs.length) {
         const prev = ctx.globalAlpha;
-        ctx.globalAlpha = Math.min(1, analysisOpacity + 0.2);
+        ctx.globalAlpha = Math.min(1, ANALYSIS_ALPHA + 0.2);
         strokeIsotherms(ctx, freezeSegs, freezingLevel, freezingLevel);
         ctx.globalAlpha = prev;
       }
@@ -1221,7 +1217,57 @@ const drawAnalysisOverlay = useCallback(() => {
     if (analysisOverlays.temp) drawOne("temp");
   
     ctx.globalAlpha = 1;
-}, [analysisOverlays, analysisOpacity, declutteredObs, tempUnit, anyOverlayOn]);
+}, [analysisOverlays, declutteredObs, tempUnit, anyOverlayOn]);
+
+const [showStations, setShowStations] = useState<boolean>(() => {
+  const saved = localStorage.getItem("showStations");
+  return saved === null ? true : saved === "true";
+});
+
+const exportPng = useCallback(() => {
+  const map = mapRef.current?.getMap();
+  if (!map) return;
+
+  // MapLibre canvas (base map + any MapLibre-rendered layers)
+  const mapCanvas = map.getCanvas();
+
+  // Overlay canvases (only draw if they exist / are mounted)
+  const overlayCanvases: HTMLCanvasElement[] = [];
+  if (analysisCanvasRef.current) overlayCanvases.push(analysisCanvasRef.current);
+  if (showStations && displayMode === "plots" && canvasRef.current) overlayCanvases.push(canvasRef.current);
+  if (analysisLabelCanvasRef.current) overlayCanvases.push(analysisLabelCanvasRef.current);
+
+  const width = mapCanvas.width;   // device pixels
+  const height = mapCanvas.height;
+
+  const out = document.createElement("canvas");
+  out.width = width;
+  out.height = height;
+
+  const ctx = out.getContext("2d");
+  if (!ctx) return;
+
+  // 1) base map
+  ctx.drawImage(mapCanvas, 0, 0);
+
+  // 2) overlays
+  for (const c of overlayCanvases) {
+    // Your overlay canvases are also sized in device pixels (you set canvas.width = cssW*dpr)
+    // so they should align with mapCanvas.
+    ctx.drawImage(c, 0, 0);
+  }
+
+  // Download
+  const dataUrl = out.toDataURL("image/png");
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = `wx-mesoanalysis_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+  a.click();
+}, [showStations, displayMode]);
+
+useEffect(() => {
+  localStorage.setItem("showStations", String(showStations));
+}, [showStations]);
 
 useEffect(() => {
   if (!mapLoaded) return;
@@ -1234,8 +1280,22 @@ useEffect(() => {
 }, [analysisOverlays]);
 
 useEffect(() => {
-  localStorage.setItem("analysisOpacity", String(analysisOpacity));
-}, [analysisOpacity]);
+  if (!mapLoaded) return;
+  if (!showStations) return;
+  if (displayMode !== "plots") return;
+
+  // Canvas is mounted only when showStations && plots,
+  // so schedule draw after React commits the DOM.
+  const raf1 = requestAnimationFrame(() => {
+    const raf2 = requestAnimationFrame(() => {
+      drawStationPlots();
+    });
+    // cleanup inner RAF if needed
+    return () => cancelAnimationFrame(raf2);
+  });
+
+  return () => cancelAnimationFrame(raf1);
+}, [mapLoaded, showStations, displayMode, drawStationPlots]);
 
   return (
     <div className="app-root">
@@ -1250,6 +1310,16 @@ useEffect(() => {
           <div className="header-controls">
             <div className="density-control">
               <div className="density-title">Obs Density</div>
+                <div className="stations-toggle">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={showStations}
+                      onChange={(e) => setShowStations(e.target.checked)}
+                    />
+                    Show stations
+                  </label>
+                </div>
               <select
                 className="density-select"
                 value={densityMode}
@@ -1261,71 +1331,61 @@ useEffect(() => {
               </select>
             </div>
             <div className="surface-obs-control">
-              <div className="surface-obs-title">Surface Observations</div>
+              <div className="surface-obs-title">SFC OBSERVATIONS</div>
               <select
                 className="surface-obs-select"
                 value={displayMode}
                 onChange={(e) => setSurfaceObsMode(e.target.value as DisplayMode)}
+                disabled={!showStations}
               >
                 <option value="plots">Station Plots</option>
                 <option value="dots">Colored Flight Rule</option>
               </select>
             </div>
             <div className="analysis-control">
-          <div className="analysis-title">Objective Analysis</div>
+              <div className="analysis-title">Objective Analysis</div>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={analysisOverlays.temp}
+                    onChange={(e) => setAnalysisOverlays(s => ({ ...s, temp: e.target.checked }))}
+                  />
+                  Isotherms (Temp)
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={analysisOverlays.dewpoint}
+                    onChange={(e) => setAnalysisOverlays(s => ({ ...s, dewpoint: e.target.checked }))}
+                  />
+                  Isodrosotherms (Dewpoint)
+                </label>
 
-  <label>
-    <input
-      type="checkbox"
-      checked={analysisOverlays.temp}
-      onChange={(e) => setAnalysisOverlays(s => ({ ...s, temp: e.target.checked }))}
-    />
-    Isotherms (Temp)
-  </label>
-
-  <label>
-    <input
-      type="checkbox"
-      checked={analysisOverlays.dewpoint}
-      onChange={(e) => setAnalysisOverlays(s => ({ ...s, dewpoint: e.target.checked }))}
-    />
-    Isodrosotherms (Dewpoint)
-  </label>
-
-  <label>
-    <input
-      type="checkbox"
-      checked={analysisOverlays.slp}
-      onChange={(e) => setAnalysisOverlays(s => ({ ...s, slp: e.target.checked }))}
-    />
-    Isobars (SLP)
-  </label>
-
-  {anyOverlayOn && (
-    <div className="analysis-opacity">
-      <span className="analysis-opacity-label">Opacity</span>
-      <input
-        className="analysis-opacity-slider"
-        type="range"
-        min={0}
-        max={1}
-        step={0.05}
-        value={analysisOpacity}
-        onChange={(e) => setAnalysisOpacity(Number(e.target.value))}
-      />
-    </div>
-  )}
-</div>
-            <button
-              className={`temp-toggle-btn ${tempUnit === "F" ? "active" : ""}`}
-              onClick={toggleTempUnit}
-              type="button"
-              aria-label="Toggle temperature unit"
-            >
-              <span>°F</span>
-              <span className="toggle-separator">/</span>
-              <span>°C</span>
-            </button>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={analysisOverlays.slp}
+                    onChange={(e) => setAnalysisOverlays(s => ({ ...s, slp: e.target.checked }))}
+                  />
+                  Isobars (SLP)
+                </label>
+            </div>
+            <div className="header-actions">
+              <div className="options-title">OPTIONS</div>
+                <button
+                  className={`temp-toggle-btn ${tempUnit === "F" ? "active" : ""}`}
+                  onClick={toggleTempUnit}
+                  type="button"
+                  aria-label="Toggle temperature unit"
+                >
+                  <span>°F</span>
+                  <span className="toggle-separator">/</span>
+                  <span>°C</span>
+                </button>
+                <button type="button" onClick={exportPng} className="export-btn">
+                    Download View as PNG
+                </button>
+            </div>
           </div>
 
       <main className="app-main">
@@ -1347,7 +1407,7 @@ useEffect(() => {
               />
             )}
 
-            {displayMode === "plots" && (
+            {showStations && displayMode === "plots" && (
               <canvas
                 ref={canvasRef}
                 className="station-plot-canvas"
@@ -1380,6 +1440,7 @@ useEffect(() => {
             )}
 
             <MapGL
+              preserveDrawingBuffer={true}
               onLoad={() => setMapLoaded(true)}
               ref={mapRef}
               reuseMaps
@@ -1390,16 +1451,17 @@ useEffect(() => {
               maxZoom={12}
               mapStyle={mapStyle}
               attributionControl={true}
-              interactiveLayerIds={displayMode === "plots" ? ["hit-targets"] : ["unclustered"]}
+              interactiveLayerIds={
+                showStations
+                  ? (displayMode === "plots" ? ["hit-targets"] : ["unclustered"])
+                  : []
+              }
               onClick={(e) => {
+                if (!showStations) return;
                 const map = mapRef.current?.getMap();
                 if (!map) return;
 
-                const layers =
-                  displayMode === "plots"
-                    ? ["hit-targets"]
-                    : ["unclustered"];
-
+                const layers = displayMode === "plots" ? ["hit-targets"] : ["unclustered"];
                 const features = map.queryRenderedFeatures(e.point, { layers });
 
                 const f = features?.[0];
@@ -1421,13 +1483,8 @@ useEffect(() => {
             >
               <NavigationControl position="top-left" />
               <Source id="stations" type="geojson" data={stationsGeoJson}>
-                {displayMode === "dots" && (
-                  <Layer {...unclusteredLayer} key="dots-layer" />
-                )}
-
-                {displayMode === "plots" && (
-                  <Layer {...hitTargetsLayer} key="hit-layer" />
-                )}
+                {displayMode === "dots" && <Layer {...unclusteredLayer} key="dots-layer" />}
+                {displayMode === "plots" && <Layer {...hitTargetsLayer} key="hit-layer" />}
               </Source>
             </MapGL>
           </div>
@@ -1591,16 +1648,44 @@ useEffect(() => {
 
                           <div className="detail-section">
                             <div className="detail-section-title">Pressure</div>
+
                             {s.altimeterInhg !== null && (
                               <div className="detail-row">
                                 <span className="detail-label">Altimeter:</span>
                                 <span>{s.altimeterInhg.toFixed(2)} inHg</span>
                               </div>
                             )}
+
                             {s.pressureMb !== null && (
                               <div className="detail-row">
                                 <span className="detail-label">Pressure (MSL):</span>
-                                <span>{s.pressureMb.toFixed(1)} mb</span>
+                                <span>
+                                  {s.pressureMb.toFixed(1)} mb
+                                  {s.pressureIsEstimated ? (
+                                    <span
+                                      style={{
+                                        marginLeft: 8,
+                                        padding: "2px 6px",
+                                        borderRadius: 6,
+                                        fontSize: 12,
+                                        fontWeight: 600,
+                                        border: "1px solid #f59e0b",
+                                        color: "#92400e",
+                                        background: "rgba(245, 158, 11, 0.12)",
+                                      }}
+                                      title="Sea-level pressure was computed from altimeter + elevation + temperature"
+                                    >
+                                      EST
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </div>
+                            )}
+
+                            {s.pressureIsEstimated && s.pressureMb === null && (
+                              <div className="detail-row">
+                                <span className="detail-label">Pressure (MSL):</span>
+                                <span>Estimated</span>
                               </div>
                             )}
                           </div>
@@ -1746,16 +1831,44 @@ useEffect(() => {
 
               <div className="detail-section">
                 <div className="detail-section-title">Pressure</div>
+
                 {selectedStation.altimeterInhg !== null && (
                   <div className="detail-row">
                     <span className="detail-label">Altimeter:</span>
                     <span>{selectedStation.altimeterInhg.toFixed(2)} inHg</span>
                   </div>
                 )}
+
                 {selectedStation.pressureMb !== null && (
                   <div className="detail-row">
                     <span className="detail-label">Pressure (MSL):</span>
-                    <span>{selectedStation.pressureMb.toFixed(1)} mb</span>
+                    <span>
+                      {selectedStation.pressureMb.toFixed(1)} mb
+                      {selectedStation.pressureIsEstimated ? (
+                        <span
+                          style={{
+                            marginLeft: 8,
+                            padding: "2px 6px",
+                            borderRadius: 6,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            border: "1px solid #f59e0b",
+                            color: "#92400e",
+                            background: "rgba(245, 158, 11, 0.12)",
+                          }}
+                          title="Sea-level pressure was computed from altimeter + elevation + temperature"
+                        >
+                          EST
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                )}
+
+                {selectedStation.pressureIsEstimated && selectedStation.pressureMb === null && (
+                  <div className="detail-row">
+                    <span className="detail-label">Pressure (MSL):</span>
+                    <span>Estimated</span>
                   </div>
                 )}
               </div>

@@ -38,8 +38,10 @@
 
 .header-controls {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 32px;
+  padding-left: 16px;
+  padding-right: 16px;
 }
 
 .temp-toggle-container {
@@ -104,20 +106,11 @@
 }
 
 .surface-obs-title {
-  font-size: 0.9rem;        /* larger than body text */
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  color: #e5e7eb;           /* light slate */
-  opacity: 0.9;
-}
-
-.surface-obs-select {
-  background: rgba(15, 23, 42, 0.85);
-  color: #e5e7eb;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 0.5rem;
-  padding: 0.35rem 0.75rem;
-  font-size: 0.875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
 }
 
 .surface-obs-menu {
@@ -147,16 +140,32 @@
 .temp-toggle-btn {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem 0.75rem;
+  justify-content: center;     /* 🔑 center contents horizontally */
+  gap: 0.5rem;
+
+  height: 34px;               /* match export button */
+  padding: 0 14px;            /* same horizontal padding */
+
   background: rgba(31, 41, 55, 0.8);
   border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 0.5rem;
+  border-radius: 8px;
+
   color: #9ca3af;
-  font-size: 0.875rem;
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: 0.02em;
+
   cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.temp-toggle-btn span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;            /* symmetric */
+  border-radius: 6px;
+  min-width: 26px;             /* keeps °F and °C equal width */
 }
 
 .temp-toggle-btn:hover {
@@ -625,4 +634,73 @@
   }
 }
 
+.export-btn {
+  height: 34px;
+  padding: 0 14px;
 
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+
+  background: rgba(17, 24, 39, 0.6); /* slate-900 w/ transparency */
+  color: #e5e7eb;                    /* gray-200 */
+
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+
+  cursor: pointer;
+  white-space: nowrap;
+
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.export-btn:hover {
+  background: rgba(17, 24, 39, 0.8);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+.export-btn:active {
+  background: rgba(17, 24, 39, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.export-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.6),
+    0 0 0 3px rgba(59, 130, 246, 0.25);
+}
+
+.header-actions {
+  display: flex;
+  flex-direction: column;   /* 🔑 stack vertically */
+  gap: 10px;                /* spacing between buttons */
+  align-items: flex-start;    /* left-align buttons */
+  min-width: 200px;
+}
+
+.header-actions .temp-toggle-btn,
+.header-actions .export-btn {
+  width: 220px;              /* consistent width */
+}
+
+.options-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-bottom: 6px;
+}
+
+.density-control,
+.surface-obs-control,
+.analysis-control,
+.header-actions {
+  padding-top: 2px;          /* tiny nudge to align titles visually */
+}

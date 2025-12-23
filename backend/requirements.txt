@@ -3,5 +3,6 @@ uvicorn[standard]
 pydantic
 requests
 metar
+metpy
 
 

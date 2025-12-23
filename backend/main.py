@@ -35,6 +35,7 @@ class SurfaceObs(BaseModel):
     skyConditions: List[SkyCondition] = []
     altimeterInhg: Optional[float] = None
     pressureMb: Optional[float] = None
+    pressureIsEstimated: bool = False
     relativeHumidity: Optional[float] = None
     weatherCodes: Optional[str] = None
     flightRule: str = "UNKNOWN"
@@ -94,6 +95,7 @@ async def update_observations():
                         skyConditions=sky_conditions,
                         altimeterInhg=obs_dict.get("altimeterInhg"),
                         pressureMb=obs_dict.get("pressureMb"),
+                        pressureIsEstimated=obs_dict.get("pressureIsEstimated", False),
                         relativeHumidity=obs_dict.get("relativeHumidity"),
                         weatherCodes=obs_dict.get("weatherCodes"),
                         flightRule=obs_dict.get("flightRule", "UNKNOWN"),

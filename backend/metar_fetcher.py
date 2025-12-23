@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import logging
 import time
+from metpy.calc import altimeter_to_sea_level_pressure
+from metpy.units import units
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +185,7 @@ def fetch_current_metars() -> List[dict]:
                     "data": "all",
                     "format": "onlycomma",
                     "latlon": "yes",
+                    "elev": "yes",
                     "hours": "1",  # Get observations from last hour
                 },
                 headers=REQUEST_HEADERS,
@@ -256,6 +259,16 @@ def fetch_current_metars() -> List[dict]:
                 # Skip if coordinates are invalid
                 if lat == 0 and lon == 0:
                     continue
+                
+                # Extract elevation (meters)
+                elevation_m = None
+                try:
+                    elev_str = row.get("elevation", "") or row.get("elev", "")
+                    elev_str = elev_str.strip()
+                    if elev_str and elev_str.lower() not in ("", "m", "null"):
+                        elevation_m = float(elev_str)
+                except (ValueError, TypeError):
+                    pass
                 
                 # Extract temperature (in Fahrenheit, convert to Celsius)
                 temp_f = None
@@ -351,12 +364,26 @@ def fetch_current_metars() -> List[dict]:
                 
                 # Extract pressure (millibars)
                 pressure_mb = None
+                pressure_is_estimated = False
                 try:
                     mslp_str = row.get("mslp", "").strip()
                     if mslp_str and mslp_str.lower() not in ("", "m", "null"):
                         pressure_mb = float(mslp_str)
                 except (ValueError, TypeError):
                     pass
+                
+                # Compute sea-level pressure if missing and we have required data
+                if pressure_mb is None and altimeter_inhg is not None and temp_c is not None and elevation_m is not None:
+                    try:
+                        altimeter_pa = (altimeter_inhg * units.inch_Hg).to(units.pascal)
+                        temp_k = (temp_c * units.degC).to(units.kelvin)
+                        elevation_m_units = elevation_m * units.meter
+                        
+                        slp_pa = altimeter_to_sea_level_pressure(altimeter_pa, elevation_m_units, temp_k)
+                        pressure_mb = slp_pa.to(units.mbar).magnitude
+                        pressure_is_estimated = True
+                    except Exception:
+                        pass
                 
                 # Extract relative humidity
                 relative_humidity = None
@@ -395,6 +422,7 @@ def fetch_current_metars() -> List[dict]:
                     "skyConditions": sky_conditions,
                     "altimeterInhg": round(altimeter_inhg, 2) if altimeter_inhg is not None else None,
                     "pressureMb": round(pressure_mb, 1) if pressure_mb is not None else None,
+                    "pressureIsEstimated": pressure_is_estimated,
                     "relativeHumidity": round(relative_humidity, 1) if relative_humidity is not None else None,
                     "weatherCodes": weather_codes if weather_codes else None,
                     "flightRule": flight_rule,
