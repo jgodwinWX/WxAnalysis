@@ -506,25 +506,24 @@ const densityPx = useMemo(() => {
     if (timelineMode !== "history") return;
     if (!isPlaying) return;
     if (availableTimes.length < 2) return;
+    if (timeIndex < 0) return; // wait until we have a valid index
   
-    const id = window.setInterval(() => {
+    const lastIdx = availableTimes.length - 1;
+    const isLastFrame = timeIndex >= lastIdx;
+  
+    // Hold the last frame for 2x the selected speed
+    const delay = isLastFrame ? playSpeedMs * 2 : playSpeedMs;
+  
+    const id = window.setTimeout(() => {
       setTimeIndex((prev) => {
-        const next = prev + 1;
-        if (next >= availableTimes.length) {
-          // stop at end (or wrap if you want)
-          return prev;
-        }
-        return next;
+        const last = availableTimes.length - 1;
+        if (prev >= last) return 0;     // loop back to start
+        return prev + 1;                // advance
       });
-    }, playSpeedMs);
+    }, delay);
   
-    return () => window.clearInterval(id);
-  }, [timelineMode, isPlaying, playSpeedMs, availableTimes.length]);
-
-  useEffect(() => {
-    if (!isPlaying) return;
-    if (timeIndex >= availableTimes.length - 1) setIsPlaying(false);
-  }, [isPlaying, timeIndex, availableTimes.length]);
+    return () => window.clearTimeout(id);
+  }, [timelineMode, isPlaying, playSpeedMs, availableTimes.length, timeIndex]);
 
   // Handle ESC key to close popup
   useEffect(() => {
