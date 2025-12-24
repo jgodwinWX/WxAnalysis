@@ -121,3 +121,10 @@ project-root/
 ## License
 
 MIT
+
+---
+
+## Update history
+v0.2 -- Added objective analysis using surface METARs as underlying data.
+   v0.21 -- Time slider bar with observation history.
+v0.1 -- Initial build with flight rule dots and surface station models.

@@ -229,6 +229,18 @@ function App() {
     pitch: 0,
     padding: { top: 0, left: 0, bottom: 0, right: 0 },
   });
+  type TimelineMode = "live" | "history";
+
+  const [timelineMode, setTimelineMode] = useState<TimelineMode>("live");
+  const [availableTimes, setAvailableTimes] = useState<string[]>([]);
+  const [timeIndex, setTimeIndex] = useState<number>(-1);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playSpeedMs, setPlaySpeedMs] = useState<number>(600);
+
+  // simple cache to avoid refetching frames while animating
+  const obsCacheRef = useRef<Map<string, SurfaceObs[]>>(new Map());
+  const inflightRef = useRef<AbortController | null>(null);
   const plotDetail = useMemo(() => {
     if (viewState.zoom && viewState.zoom < 5.5) return "low";
     if (viewState.zoom && viewState.zoom < 7.5) return "medium";
@@ -411,15 +423,108 @@ const densityPx = useMemo(() => {
     }
   };
 
-  useEffect(() => {
-    // Initial fetch
-    fetchObservations();
-    
-    // Auto-refresh every 5 minutes
-    const interval = setInterval(fetchObservations, 300000);
-    
-    return () => clearInterval(interval);
+  const fetchAvailableTimes = useCallback(async (minutes = 360) => {
+    try {
+      const res = await fetch(`/api/obs/times?minutes=${minutes}`);
+      const data = await res.json();
+      const times: string[] = Array.isArray(data.times) ? data.times : [];
+      setAvailableTimes(times);
+      // default to latest if we haven't chosen yet
+      if (times.length > 0) setTimeIndex(times.length - 1);
+    } catch (e) {
+      console.error("Failed to fetch available times:", e);
+      setAvailableTimes([]);
+      setTimeIndex(-1);
+    }
   }, []);
+  
+  const fetchObsAtTime = useCallback(async (iso: string) => {
+    // cache hit
+    const cached = obsCacheRef.current.get(iso);
+    if (cached) {
+      setObs(cached);
+      setLastUpdate(iso);
+      setIsLoading(false);
+      return;
+    }
+  
+    // cancel any inflight request (fast scrubbing)
+    inflightRef.current?.abort();
+    const ac = new AbortController();
+    inflightRef.current = ac;
+  
+    try {
+      const res = await fetch(`/api/obs/at?time=${encodeURIComponent(iso)}`, {
+        signal: ac.signal,
+      });
+      const data = await res.json();
+      const stations: SurfaceObs[] = data.stations ?? [];
+      obsCacheRef.current.set(iso, stations);
+  
+      setObs(stations);
+      // use returned time if you prefer: data.generated_at or data.snapshot_time
+      setLastUpdate(data.generated_at ?? iso);
+      setIsLoading(false);
+    } catch (e: any) {
+      if (e?.name === "AbortError") return;
+      console.error("Failed to fetch obs at time:", e);
+      setIsLoading(false);
+    }
+  }, []);
+
+  const [showStations, setShowStations] = useState<boolean>(() => {
+    const saved = localStorage.getItem("showStations");
+    return saved === null ? true : saved === "true";
+  });
+
+  useEffect(() => {
+    // LIVE MODE: keep your current polling behavior
+    if (timelineMode === "live") {
+      fetchObservations();
+      const interval = setInterval(fetchObservations, 300000);
+      return () => clearInterval(interval);
+    }
+  
+    // HISTORY MODE: load list of times once (and occasionally refresh list)
+    fetchAvailableTimes(360);
+    const interval = setInterval(() => fetchAvailableTimes(360), 300000);
+    return () => clearInterval(interval);
+  }, [timelineMode, fetchAvailableTimes]);
+
+  useEffect(() => {
+    if (timelineMode !== "history") return;
+    if (timeIndex < 0) return;
+    if (timeIndex >= availableTimes.length) return;
+  
+    const t = availableTimes[timeIndex];
+    if (!t) return;
+  
+    fetchObsAtTime(t);
+  }, [timelineMode, timeIndex, availableTimes, fetchObsAtTime]);
+
+  useEffect(() => {
+    if (timelineMode !== "history") return;
+    if (!isPlaying) return;
+    if (availableTimes.length < 2) return;
+  
+    const id = window.setInterval(() => {
+      setTimeIndex((prev) => {
+        const next = prev + 1;
+        if (next >= availableTimes.length) {
+          // stop at end (or wrap if you want)
+          return prev;
+        }
+        return next;
+      });
+    }, playSpeedMs);
+  
+    return () => window.clearInterval(id);
+  }, [timelineMode, isPlaying, playSpeedMs, availableTimes.length]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (timeIndex >= availableTimes.length - 1) setIsPlaying(false);
+  }, [isPlaying, timeIndex, availableTimes.length]);
 
   // Handle ESC key to close popup
   useEffect(() => {
@@ -594,7 +699,7 @@ const densityPx = useMemo(() => {
         continue;
       }
     }
-  }, [declutteredObs, tempUnit, viewState, displayMode]);
+  }, [declutteredObs, tempUnit, viewState, displayMode, showStations]);
 
   // Redraw canvas on map move/zoom/resize
   useEffect(() => {
@@ -1219,11 +1324,6 @@ const drawAnalysisOverlay = useCallback(() => {
     ctx.globalAlpha = 1;
 }, [analysisOverlays, declutteredObs, tempUnit, anyOverlayOn]);
 
-const [showStations, setShowStations] = useState<boolean>(() => {
-  const saved = localStorage.getItem("showStations");
-  return saved === null ? true : saved === "true";
-});
-
 const exportPng = useCallback(() => {
   const map = mapRef.current?.getMap();
   if (!map) return;
@@ -1297,6 +1397,31 @@ useEffect(() => {
   return () => cancelAnimationFrame(raf1);
 }, [mapLoaded, showStations, displayMode, drawStationPlots]);
 
+useEffect(() => {
+  if (!mapLoaded) return;
+
+  const raf = requestAnimationFrame(() => {
+    // analysis overlay
+    if (anyOverlayOn) drawAnalysisOverlay();
+
+    // station plots
+    if (showStations && displayMode === "plots") drawStationPlots();
+
+    // helps when toggling layers / mode quickly
+    mapRef.current?.getMap()?.triggerRepaint?.();
+  });
+
+  return () => cancelAnimationFrame(raf);
+}, [
+  mapLoaded,
+  obs,                 // redraw when the frame changes
+  anyOverlayOn,
+  drawAnalysisOverlay,
+  showStations,
+  displayMode,
+  drawStationPlots,
+]);
+
   return (
     <div className="app-root">
       <header className="app-header">
@@ -1369,6 +1494,92 @@ useEffect(() => {
                   />
                   Isobars (SLP)
                 </label>
+            </div>
+            <div className="time-control">
+              <div className="time-title">TIME</div>
+
+              <div className="time-row">
+                <label className="time-mode">
+                  <input
+                    type="radio"
+                    name="timelineMode"
+                    checked={timelineMode === "live"}
+                    onChange={() => { setTimelineMode("live"); setIsPlaying(false); }}
+                  />
+                  Live
+                </label>
+                <label className="time-mode">
+                  <input
+                    type="radio"
+                    name="timelineMode"
+                    checked={timelineMode === "history"}
+                    onChange={() => setTimelineMode("history")}
+                  />
+                  History
+                </label>
+              </div>
+
+              {timelineMode === "history" && (
+                <>
+                  <div className="time-row">
+                    <button
+                      type="button"
+                      className="control-btn"
+                      onClick={() => setTimeIndex((i) => Math.max(0, i - 1))}
+                      disabled={availableTimes.length === 0 || timeIndex <= 0}
+                    >
+                      ◀
+                    </button>
+
+                    <button
+                      type="button"
+                      className={`control-btn ${isPlaying ? "active" : ""}`}
+                      onClick={() => setIsPlaying((p) => !p)}
+                      disabled={availableTimes.length < 2}
+                    >
+                      {isPlaying ? "Pause" : "Play"}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="control-btn"
+                      onClick={() => setTimeIndex((i) => Math.min(availableTimes.length - 1, i + 1))}
+                      disabled={availableTimes.length === 0 || timeIndex >= availableTimes.length - 1}
+                    >
+                      ▶
+                    </button>
+
+                    <select
+                      className="density-select"
+                      value={playSpeedMs}
+                      onChange={(e) => setPlaySpeedMs(Number(e.target.value))}
+                    >
+                      <option value={250}>0.25s</option>
+                      <option value={500}>0.5s</option>
+                      <option value={800}>0.8s</option>
+                      <option value={1200}>1.2s</option>
+                    </select>
+                  </div>
+
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, availableTimes.length - 1)}
+                    step={1}
+                    value={Math.max(0, timeIndex)}
+                    onChange={(e) => {
+                      setIsPlaying(false);
+                      setTimeIndex(Number(e.target.value));
+                    }}
+                    disabled={availableTimes.length === 0}
+                  />
+
+                  <div className="time-label">
+                    {availableTimes[timeIndex] ? formatZulu(availableTimes[timeIndex]) : "—"}{" "}
+                    {availableTimes[timeIndex] ? `(${formatAge(availableTimes[timeIndex])})` : ""}
+                  </div>
+                </>
+              )}
             </div>
             <div className="header-actions">
               <div className="options-title">OPTIONS</div>
