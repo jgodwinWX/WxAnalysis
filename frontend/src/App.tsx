@@ -217,6 +217,46 @@ function drawWindBarb(
   }
 }
 
+function drawWindVector(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  dirFromDeg: number,
+  spdKt: number
+) {
+  // Arrow points TOWARD where wind is going TO
+  // given dirFromDeg (meteorological "from" direction)
+  const theta = ((dirFromDeg + 90) * Math.PI) / 180; // +90 rotates to "to"
+  const dx = Math.cos(theta);
+  const dy = Math.sin(theta);
+
+  // length scaling (tune to taste)
+  const len = Math.max(10, Math.min(42, spdKt * 1.2));
+  const x2 = x + len * dx;
+  const y2 = y + len * dy;
+
+  // shaft
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // arrow head
+  const head = 7;
+  const ang = Math.PI / 7;
+  const lx = x2 - head * Math.cos(theta - ang);
+  const ly = y2 - head * Math.sin(theta - ang);
+  const rx = x2 - head * Math.cos(theta + ang);
+  const ry = y2 - head * Math.sin(theta + ang);
+
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(lx, ly);
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(rx, ry);
+  ctx.stroke();
+}
+
 function App() {
   const [obs, setObs] = useState<SurfaceObs[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -325,6 +365,17 @@ function App() {
     ],
     []
   );
+
+  type WindRenderMode = "barbs" | "vectors";
+
+const [windRenderMode, setWindRenderMode] = useState<WindRenderMode>(() => {
+  const saved = localStorage.getItem("windRenderMode");
+  return saved === "vectors" || saved === "barbs" ? (saved as WindRenderMode) : "barbs";
+});
+
+useEffect(() => {
+  localStorage.setItem("windRenderMode", windRenderMode);
+}, [windRenderMode]);
 
   // Load flight rule color coding preference from localStorage, default to off
   const [colorCodeByFlightRule, setColorCodeByFlightRule] = useState<boolean>(() => {
@@ -886,7 +937,7 @@ const densityPx = useMemo(() => {
     return directions[index];
   };
 
-  type AnalysisOverlay = "temp" | "dewpoint" | "slp";
+  type AnalysisOverlay = "temp" | "dewpoint" | "slp" | "wind";
   type AnalysisOverlaySet = Record<AnalysisOverlay, boolean>;
   
   const [analysisOverlays, setAnalysisOverlays] = useState<AnalysisOverlaySet>(() => {
@@ -898,13 +949,15 @@ const densityPx = useMemo(() => {
           temp: !!obj.temp,
           dewpoint: !!obj.dewpoint,
           slp: !!obj.slp,
+          wind: !!obj.wind,
         };
       } catch {}
     }
-    return { temp: true, dewpoint: false, slp: false };
+    return { temp: true, dewpoint: false, slp: false, wind: false };
   });
   
-  const anyOverlayOn = analysisOverlays.temp || analysisOverlays.dewpoint || analysisOverlays.slp;
+  const anyOverlayOn =
+  analysisOverlays.temp || analysisOverlays.dewpoint || analysisOverlays.slp || analysisOverlays.wind;
 
 type Pt = { x: number; y: number };
 
@@ -1186,6 +1239,107 @@ const drawAnalysisOverlay = useCallback(() => {
   const maxRadius = 200;    // px search radius
   const maxRadius2 = maxRadius * maxRadius;
   const kMax = 10;
+  const windStep = 42;
+
+  function drawWind() {
+    const pts: Array<{ x: number; y: number; u: number; v: number }> = [];
+  
+    for (const s of declutteredObs) {
+      if (s.windDirDeg == null || s.windSpeedKt == null) continue;
+      const p = map.project([s.lon, s.lat]);
+      const { u, v } = windToUV(s.windDirDeg, s.windSpeedKt);
+      pts.push({ x: p.x, y: p.y, u, v });
+    }
+    if (pts.length < 3) return;
+  
+    const nx = Math.floor(width / windStep) + 1;
+    const ny = Math.floor(height / windStep) + 1;
+  
+    const gridU = new Float32Array(nx * ny);
+    const gridV = new Float32Array(nx * ny);
+    gridU.fill(Number.NaN);
+    gridV.fill(Number.NaN);
+  
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const gx = i * windStep;
+        const gy = j * windStep;
+  
+        const neighbors: Array<{ d2: number; u: number; v: number }> = [];
+        for (const p of pts) {
+          const dx = p.x - gx;
+          const dy = p.y - gy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > maxRadius2) continue;
+  
+          let inserted = false;
+          for (let k = 0; k < neighbors.length; k++) {
+            if (d2 < neighbors[k].d2) {
+              neighbors.splice(k, 0, { d2, u: p.u, v: p.v });
+              inserted = true;
+              break;
+            }
+          }
+          if (!inserted) neighbors.push({ d2, u: p.u, v: p.v });
+          if (neighbors.length > kMax) neighbors.pop();
+        }
+  
+        if (neighbors.length < 3) continue;
+  
+        let wSum = 0;
+        let uSum = 0;
+        let vSum = 0;
+  
+        for (const n of neighbors) {
+          const w = 1 / Math.pow(Math.max(n.d2, 9), power / 2);
+          wSum += w;
+          uSum += w * n.u;
+          vSum += w * n.v;
+        }
+        if (wSum <= 0) continue;
+  
+        const idx = j * nx + i;
+        gridU[idx] = uSum / wSum;
+        gridV[idx] = vSum / wSum;
+      }
+    }
+  
+    // Draw barbs at each valid grid point
+    ctx.save();
+    ctx.globalAlpha = 0.9;           // wind a bit more visible
+    ctx.strokeStyle = "#111827";
+    ctx.fillStyle = "#111827";
+    ctx.lineWidth = 1.4;
+  
+    const zoom = map.getZoom();
+    const attachRadius = 0;          // detached barbs for analysis field
+    const barbRadius = zoom < 6 ? 0 : 0; // keep detached either way
+  
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const idx = j * nx + i;
+        const u = gridU[idx];
+        const v = gridV[idx];
+        if (!Number.isFinite(u) || !Number.isFinite(v)) continue;
+  
+        const { dir, spd } = uvToDirSpd(u, v);
+        // Skip near-calm so the field isn’t noisy
+        if (spd < 2) continue;
+  
+        const x = i * windStep;
+        const y = j * windStep;
+  
+        // Use your existing barb renderer (dir is "from")
+        if (windRenderMode === "barbs") {
+          drawWindBarb(ctx, x, y, 0, dir, spd);
+        } else {
+          drawWindVector(ctx, x, y, dir, spd);
+        }
+      }
+    }
+  
+    ctx.restore();
+  }
 
   function drawOne(mode: AnalysisOverlay) {
     // Build pts for THIS field
@@ -1204,6 +1358,10 @@ const drawAnalysisOverlay = useCallback(() => {
       } else if (mode === "slp") {
         if (s.pressureMb == null) continue;
         pts.push({ x: p.x, y: p.y, val: s.pressureMb });
+      } else if (mode === "wind") {
+        if (s.windDirDeg == null || s.windSpeedKt == null) continue;
+        const { u, v } = windToUV(s.windDirDeg, s.windSpeedKt);
+        // store both components in val via two arrays (see below)
       }
     }
     if (pts.length < 3) return;
@@ -1319,9 +1477,27 @@ const drawAnalysisOverlay = useCallback(() => {
     if (analysisOverlays.slp) drawOne("slp");
     if (analysisOverlays.dewpoint) drawOne("dewpoint");
     if (analysisOverlays.temp) drawOne("temp");
+    if (analysisOverlays.wind) drawWind();
   
     ctx.globalAlpha = 1;
-}, [analysisOverlays, declutteredObs, tempUnit, anyOverlayOn]);
+  }, [analysisOverlays, declutteredObs, tempUnit, anyOverlayOn, windRenderMode]);
+
+function windToUV(dirDeg: number, spdKt: number) {
+  // METAR direction is "from" direction.
+  const rad = (dirDeg * Math.PI) / 180;
+  const u = -spdKt * Math.sin(rad); // +u east
+  const v = -spdKt * Math.cos(rad); // +v north
+  return { u, v };
+}
+
+function uvToDirSpd(u: number, v: number) {
+  const spd = Math.sqrt(u * u + v * v);
+  if (spd < 1e-6) return { dir: 0, spd: 0 };
+  // Convert to "from" direction
+  const dirRad = Math.atan2(-u, -v);
+  const dir = ((dirRad * 180) / Math.PI + 360) % 360;
+  return { dir, spd };
+}
 
 const exportPng = useCallback(() => {
   const map = mapRef.current?.getMap();
@@ -1484,7 +1660,6 @@ useEffect(() => {
                   />
                   Isodrosotherms (Dewpoint)
                 </label>
-
                 <label>
                   <input
                     type="checkbox"
@@ -1493,6 +1668,35 @@ useEffect(() => {
                   />
                   Isobars (SLP)
                 </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={analysisOverlays.wind}
+                    onChange={(e) =>
+                      setAnalysisOverlays((s) => ({ ...s, wind: e.target.checked }))
+                    }
+                  />
+                  Wind (Objective)
+                </label>
+                {analysisOverlays.wind && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.8 }}>Wind Render</span>
+                    <button
+                      type="button"
+                      className={`control-btn ${windRenderMode === "barbs" ? "active" : ""}`}
+                      onClick={() => setWindRenderMode("barbs")}
+                    >
+                      Barbs
+                    </button>
+                    <button
+                      type="button"
+                      className={`control-btn ${windRenderMode === "vectors" ? "active" : ""}`}
+                      onClick={() => setWindRenderMode("vectors")}
+                    >
+                      Vectors
+                    </button>
+                  </div>
+                )}
             </div>
             <div className="time-control">
               <div className="time-title">TIME</div>
