@@ -123,6 +123,12 @@ project-root/
 MIT
 
 ---
+## Disclaimer
+This project is provided for educational and research purposes only.
+It is not intended for operational, safety-critical, or decision-making use.
+The authors make no guarantees regarding accuracy, completeness, or availability.
+
+---
 
 ## Update history
 v0.2 -- Added objective analysis using surface METARs as underlying data.
