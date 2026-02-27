@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timezone
 import asyncio
@@ -45,6 +45,8 @@ class SurfaceObs(BaseModel):
     weatherCodes: Optional[str] = None
     flightRule: str = "UNKNOWN"
     rawMetar: Optional[str] = None
+    qcFlags: List[str] = Field(default_factory=list)
+    analysisExcludeFields: List[str] = Field(default_factory=list)
 
 
 class ObsResponse(BaseModel):
@@ -143,6 +145,8 @@ async def update_observations():
                         weatherCodes=obs_dict.get("weatherCodes"),
                         flightRule=obs_dict.get("flightRule", "UNKNOWN"),
                         rawMetar=obs_dict.get("rawMetar"),
+                        qcFlags=obs_dict.get("qcFlags", []),
+                        analysisExcludeFields=obs_dict.get("analysisExcludeFields", []),
                     )
                     new_obs.append(obs)
                 except Exception as e:
@@ -260,5 +264,4 @@ async def refresh_obs() -> dict:
         "station_count": len(_latest_obs),
         "last_update": _last_update.isoformat() if _last_update else None,
     }
-
 

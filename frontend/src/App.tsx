@@ -28,12 +28,71 @@ type SurfaceObs = {
   weatherCodes: string | null;
   flightRule: string;
   rawMetar: string | null;
+  qcFlags?: string[];
+  analysisExcludeFields?: string[];
 };
 
 type TempUnit = "F" | "C";
+type WindUnit = "KT" | "MPH" | "KPH";
+
+const WIND_FILL_BINS_KT = [0, 5, 10, 15, 20, 30, 40, 60, Number.POSITIVE_INFINITY];
+const WIND_FILL_COLORS = [
+  "#dbeafe",
+  "#93c5fd",
+  "#60a5fa",
+  "#34d399",
+  "#facc15",
+  "#fb923c",
+  "#ef4444",
+  "#a855f7",
+];
+
+const CEILING_LEVELS_HUNDREDS_FT = [0, 2, 5, 10, 30, 50];
+const CEILING_FILL_COLORS = [
+  "#f472b6", // LIFR
+  "#f87171", // IFR
+  "#ef4444", // IFR deeper
+  "#60a5fa", // MVFR
+  "#4ade80", // VFR
+];
+
+const VISIBILITY_LEVELS_SM = [0, 0.25, 0.5, 1, 3, 5, 6];
+const VISIBILITY_FILL_COLORS = [
+  "#f472b6", // LIFR
+  "#ec4899", // LIFR deeper
+  "#f87171", // IFR edge
+  "#ef4444", // IFR
+  "#60a5fa", // MVFR
+  "#4ade80", // VFR
+];
+
+const RH_DRY_LEVELS = [0, 10, 20, 25];
+const RH_DRY_COLORS = ["#dc2626", "#fb923c", "#facc15"];
+const RH_MOIST_LEVELS = [90, 95, 100];
+const RH_MOIST_COLORS = ["#86efac", "#166534"];
+
+const ADM0_BOUNDARIES_URL =
+  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson";
+const ADM1_BOUNDARIES_URL =
+  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson";
+const ADM2_BOUNDARIES_URL =
+  "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json";
+const HISTORY_WINDOW_MINUTES = 360;
 
 function celsiusToFahrenheit(c: number): number {
   return (c * 9) / 5 + 32;
+}
+
+function knotsToWindUnit(kt: number, unit: WindUnit): number {
+  if (unit === "MPH") return kt * 1.15078;
+  if (unit === "KPH") return kt * 1.852;
+  return kt;
+}
+
+function getWindFillThresholds(unit: WindUnit): number[] {
+  if (unit === "MPH") return [0, 6, 12, 17, 23, 35, 46, 70, Number.POSITIVE_INFINITY];
+  if (unit === "KPH") return [0, 9, 19, 28, 37, 56, 74, 111, Number.POSITIVE_INFINITY];
+  return [0, 5, 10, 15, 20, 30, 40, 60, Number.POSITIVE_INFINITY];
 }
 
 // Thin the stations by a pixel grid to reduce the number of points on the map
@@ -105,6 +164,17 @@ function formatSky(sky: SkyCondition[]) {
   return sky
     .map(l => `${l.cover}${l.level_ft !== null ? String(Math.round(l.level_ft / 100)).padStart(3,"0") : "///"}`)
     .join(" ");
+}
+
+function hasQcFlags(station: SurfaceObs): boolean {
+  return Array.isArray(station.qcFlags) && station.qcFlags.length > 0;
+}
+
+function isExcludedFromAnalysis(
+  station: SurfaceObs,
+  field: "temp" | "dewpoint" | "slp" | "wind" | "ceiling" | "visibility" | "humidity" | "relativeHumidity"
+): boolean {
+  return Array.isArray(station.analysisExcludeFields) && station.analysisExcludeFields.includes(field);
 }
 
 function drawWindBarb(
@@ -262,8 +332,8 @@ function App() {
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [viewState, setViewState] = useState<ViewState>({
-    longitude: -97.6,
-    latitude: 35.4,
+    longitude: -94.5928,
+    latitude: 39.1232,
     zoom: 6,
     bearing: 0,
     pitch: 0,
@@ -461,6 +531,11 @@ const densityPx = useMemo(() => {
     return (saved === "C" || saved === "F" ? saved : "F") as TempUnit;
   });
 
+  const [windUnit, setWindUnit] = useState<WindUnit>(() => {
+    const saved = localStorage.getItem("windUnit");
+    return saved === "MPH" || saved === "KPH" || saved === "KT" ? saved : "KT";
+  });
+
   const fetchObservations = async () => {
     try {
       const res = await fetch("/api/obs/latest");
@@ -474,11 +549,17 @@ const densityPx = useMemo(() => {
     }
   };
 
-  const fetchAvailableTimes = useCallback(async (minutes = 360) => {
+  const fetchAvailableTimes = useCallback(async (minutes = HISTORY_WINDOW_MINUTES) => {
     try {
       const res = await fetch(`/api/obs/times?minutes=${minutes}`);
       const data = await res.json();
-      const times: string[] = Array.isArray(data.times) ? data.times : [];
+      const rawTimes: string[] = Array.isArray(data.times) ? data.times : [];
+      const cutoffMs = Date.now() - HISTORY_WINDOW_MINUTES * 60_000;
+      const filteredTimes = rawTimes.filter((t) => {
+        const ms = new Date(t).getTime();
+        return Number.isFinite(ms) ? ms >= cutoffMs : true;
+      });
+      const times = filteredTimes;
       setAvailableTimes(times);
       // default to latest if we haven't chosen yet
       if (times.length > 0) setTimeIndex(times.length - 1);
@@ -528,6 +609,11 @@ const densityPx = useMemo(() => {
     return saved === null ? true : saved === "true";
   });
 
+  const [includeLegendInExport, setIncludeLegendInExport] = useState<boolean>(() => {
+    const saved = localStorage.getItem("includeLegendInExport");
+    return saved === null ? false : saved === "true";
+  });
+
   useEffect(() => {
     // LIVE MODE: keep your current polling behavior
     if (timelineMode === "live") {
@@ -537,8 +623,8 @@ const densityPx = useMemo(() => {
     }
   
     // HISTORY MODE: load list of times once (and occasionally refresh list)
-    fetchAvailableTimes(360);
-    const interval = setInterval(() => fetchAvailableTimes(360), 300000);
+    fetchAvailableTimes(HISTORY_WINDOW_MINUTES);
+    const interval = setInterval(() => fetchAvailableTimes(HISTORY_WINDOW_MINUTES), 300000);
     return () => clearInterval(interval);
   }, [timelineMode, fetchAvailableTimes]);
 
@@ -937,8 +1023,80 @@ const densityPx = useMemo(() => {
     return directions[index];
   };
 
-  type AnalysisOverlay = "temp" | "dewpoint" | "slp" | "wind";
+  const formatWindSpeed = useCallback((kt: number, digits = 1): string => {
+    const value = knotsToWindUnit(kt, windUnit);
+    return `${value.toFixed(digits)} ${windUnit}`;
+  }, [windUnit]);
+
+  const formatWindSpeedCompact = useCallback((kt: number): string => {
+    const value = knotsToWindUnit(kt, windUnit);
+    return `${Math.round(value)}${windUnit.toLowerCase()}`;
+  }, [windUnit]);
+
+  const windFillLegend = useMemo(() => {
+    const thresholds = getWindFillThresholds(windUnit);
+    return WIND_FILL_COLORS.map((color, idx) => {
+      const start = thresholds[idx];
+      const end = thresholds[idx + 1];
+      return {
+        color,
+        label: !Number.isFinite(end) ? `>${start} ${windUnit}` : `${start}-${end} ${windUnit}`,
+      };
+    });
+  }, [windUnit]);
+
+  const ceilingFillLegend = useMemo(
+    () => CEILING_FILL_COLORS.map((color, idx) => {
+      const start = CEILING_LEVELS_HUNDREDS_FT[idx];
+      const end = CEILING_LEVELS_HUNDREDS_FT[idx + 1];
+      const fmt = (v: number) => String(Math.round(v)).padStart(3, "0");
+      return { color, label: `${fmt(start)}-${fmt(end)}` };
+    }),
+    []
+  );
+
+  const visibilityFillLegend = useMemo(
+    () => VISIBILITY_FILL_COLORS.map((color, idx) => {
+      const start = VISIBILITY_LEVELS_SM[idx];
+      const end = VISIBILITY_LEVELS_SM[idx + 1];
+      const formatSm = (v: number) => {
+        if (Math.abs(v - 0.25) < 1e-6) return "1/4SM";
+        if (Math.abs(v - 0.5) < 1e-6) return "1/2SM";
+        return `${Number.isInteger(v) ? v.toFixed(0) : v.toFixed(2)}SM`;
+      };
+      return { color, label: `${formatSm(start)}-${formatSm(end)}` };
+    }),
+    []
+  );
+
+  const relativeHumidityLegend = useMemo(
+    () => [
+      ...RH_DRY_COLORS.map((color, idx) => {
+        const start = RH_DRY_LEVELS[idx];
+        const end = RH_DRY_LEVELS[idx + 1];
+        return { color, label: `${start}-${end}%` };
+      }),
+      ...RH_MOIST_COLORS.map((color, idx) => {
+        const start = RH_MOIST_LEVELS[idx];
+        const end = RH_MOIST_LEVELS[idx + 1];
+        return { color, label: !Number.isFinite(end) ? `>${start}%` : `${start}-${end}%` };
+      }),
+    ],
+    []
+  );
+
+  type AnalysisOverlay =
+    | "temp"
+    | "dewpoint"
+    | "slp"
+    | "wind"
+    | "windSpeedFill"
+    | "ceilingFill"
+    | "visibilityFill"
+    | "relativeHumidityFill";
   type AnalysisOverlaySet = Record<AnalysisOverlay, boolean>;
+  type GeographyOverlay = "adm0" | "adm1" | "adm2";
+  type GeographyOverlaySet = Record<GeographyOverlay, boolean>;
   
   const [analysisOverlays, setAnalysisOverlays] = useState<AnalysisOverlaySet>(() => {
     const saved = localStorage.getItem("analysisOverlays");
@@ -950,14 +1108,158 @@ const densityPx = useMemo(() => {
           dewpoint: !!obj.dewpoint,
           slp: !!obj.slp,
           wind: !!obj.wind,
+          windSpeedFill: !!obj.windSpeedFill,
+          ceilingFill: !!obj.ceilingFill,
+          visibilityFill: !!obj.visibilityFill,
+          relativeHumidityFill: !!obj.relativeHumidityFill,
         };
       } catch {}
     }
-    return { temp: true, dewpoint: false, slp: false, wind: false };
+    return {
+      temp: true,
+      dewpoint: false,
+      slp: false,
+      wind: false,
+      windSpeedFill: false,
+      ceilingFill: false,
+      visibilityFill: false,
+      relativeHumidityFill: false,
+    };
   });
   
   const anyOverlayOn =
-  analysisOverlays.temp || analysisOverlays.dewpoint || analysisOverlays.slp || analysisOverlays.wind;
+  analysisOverlays.temp
+  || analysisOverlays.dewpoint
+  || analysisOverlays.slp
+  || analysisOverlays.wind
+  || analysisOverlays.windSpeedFill
+  || analysisOverlays.ceilingFill
+  || analysisOverlays.visibilityFill
+  || analysisOverlays.relativeHumidityFill;
+
+  type LegendItem = { color: string; label: string };
+  type LegendCard = { title: string; items: LegendItem[] };
+  const activeLegendCards = useMemo<LegendCard[]>(() => {
+    const cards: LegendCard[] = [];
+    if (analysisOverlays.windSpeedFill) {
+      cards.push({ title: `Wind Speed (${windUnit})`, items: windFillLegend });
+    }
+    if (analysisOverlays.ceilingFill) {
+      cards.push({ title: "Ceiling (hundreds ft)", items: ceilingFillLegend });
+    }
+    if (analysisOverlays.visibilityFill) {
+      cards.push({ title: "Visibility (SM)", items: visibilityFillLegend });
+    }
+    if (analysisOverlays.relativeHumidityFill) {
+      cards.push({ title: "RH Critical (%)", items: relativeHumidityLegend });
+    }
+    return cards;
+  }, [
+    analysisOverlays.windSpeedFill,
+    analysisOverlays.ceilingFill,
+    analysisOverlays.visibilityFill,
+    analysisOverlays.relativeHumidityFill,
+    windUnit,
+    windFillLegend,
+    ceilingFillLegend,
+    visibilityFillLegend,
+    relativeHumidityLegend,
+  ]);
+
+  const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+
+  const [geographyOverlays, setGeographyOverlays] = useState<GeographyOverlaySet>(() => {
+    const saved = localStorage.getItem("geographyOverlays");
+    if (saved) {
+      try {
+        const obj = JSON.parse(saved) as Partial<GeographyOverlaySet>;
+        return {
+          adm0: !!obj.adm0,
+          adm1: !!obj.adm1,
+          adm2: !!obj.adm2,
+        };
+      } catch {}
+    }
+    return { adm0: true, adm1: true, adm2: false };
+  });
+
+  const adm0BoundaryLayer: any = useMemo(
+    () => ({
+      id: "adm0-boundaries-layer",
+      type: "line",
+      source: "adm0-boundaries",
+      paint: {
+        "line-color": "rgba(17, 24, 39, 0.9)",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          2, 1.0,
+          5, 1.4,
+          8, 2.0,
+        ],
+        "line-opacity": 0.78,
+      },
+    }),
+    []
+  );
+
+  const adm1BoundaryLayer: any = useMemo(
+    () => ({
+      id: "adm1-boundaries-layer",
+      type: "line",
+      source: "adm1-boundaries",
+      paint: {
+        "line-color": "rgba(30, 41, 59, 0.72)",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          2, 0.35,
+          5, 0.55,
+          8, 0.9,
+        ],
+        "line-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          2, 0.36,
+          4, 0.56,
+          8, 0.8,
+        ],
+      },
+    }),
+    []
+  );
+
+  const adm2BoundaryLayer: any = useMemo(
+    () => ({
+      id: "adm2-boundaries-layer",
+      type: "line",
+      source: "adm2-boundaries",
+      paint: {
+        "line-color": "rgba(51, 65, 85, 0.52)",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          4, 0.2,
+          7, 0.3,
+          10, 0.55,
+        ],
+        "line-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          4, 0.12,
+          6, 0.2,
+          8, 0.38,
+          10, 0.55,
+        ],
+      },
+    }),
+    []
+  );
 
 type Pt = { x: number; y: number };
 
@@ -1241,10 +1543,282 @@ const drawAnalysisOverlay = useCallback(() => {
   const kMax = 10;
   const windStep = 42;
 
+  function windFillColorForSpeedKt(spdKt: number): string {
+    const value = knotsToWindUnit(spdKt, windUnit);
+    const thresholds = getWindFillThresholds(windUnit);
+    for (let i = 1; i < thresholds.length; i++) {
+      if (value < thresholds[i]) return WIND_FILL_COLORS[i - 1];
+    }
+    return WIND_FILL_COLORS[WIND_FILL_COLORS.length - 1];
+  }
+
+  function drawWindSpeedFill() {
+    const pts: Array<{ x: number; y: number; val: number }> = [];
+    for (const s of declutteredObs) {
+      if (isExcludedFromAnalysis(s, "wind")) continue;
+      if (s.windSpeedKt == null) continue;
+      const p = map.project([s.lon, s.lat]);
+      pts.push({ x: p.x, y: p.y, val: s.windSpeedKt });
+    }
+    if (pts.length < 3) return;
+
+    const fillStep = 6;
+    const nx = Math.floor(width / fillStep) + 1;
+    const ny = Math.floor(height / fillStep) + 1;
+    const gridVals = new Float32Array(nx * ny);
+    gridVals.fill(Number.NaN);
+
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const gx = i * fillStep;
+        const gy = j * fillStep;
+
+        const neighbors: Array<{ d2: number; val: number }> = [];
+        for (const p of pts) {
+          const dx = p.x - gx;
+          const dy = p.y - gy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > maxRadius2) continue;
+
+          let inserted = false;
+          for (let k = 0; k < neighbors.length; k++) {
+            if (d2 < neighbors[k].d2) {
+              neighbors.splice(k, 0, { d2, val: p.val });
+              inserted = true;
+              break;
+            }
+          }
+          if (!inserted) neighbors.push({ d2, val: p.val });
+          if (neighbors.length > kMax) neighbors.pop();
+        }
+
+        if (neighbors.length < 3) continue;
+
+        let wSum = 0;
+        let vSum = 0;
+        for (const n of neighbors) {
+          const w = 1 / Math.pow(Math.max(n.d2, 9), power / 2);
+          wSum += w;
+          vSum += w * n.val;
+        }
+        if (wSum <= 0) continue;
+
+        gridVals[j * nx + i] = vSum / wSum;
+      }
+    }
+
+    ctx.save();
+    ctx.globalAlpha = 0.46;
+    ctx.setLineDash([]);
+    const offscreen = document.createElement("canvas");
+    offscreen.width = nx;
+    offscreen.height = ny;
+    const offCtx = offscreen.getContext("2d");
+    if (!offCtx) {
+      ctx.restore();
+      return;
+    }
+    const image = offCtx.createImageData(nx, ny);
+    const data = image.data;
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const idx = j * nx + i;
+        const v = gridVals[idx];
+        const p = idx * 4;
+        if (!Number.isFinite(v)) {
+          data[p + 3] = 0;
+          continue;
+        }
+        const color = windFillColorForSpeedKt(v);
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        data[p] = r;
+        data[p + 1] = g;
+        data[p + 2] = b;
+        data[p + 3] = 255;
+      }
+    }
+    offCtx.putImageData(image, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(offscreen, 0, 0, nx, ny, 0, 0, width, height);
+    ctx.restore();
+  }
+
+  function scalarFillColorForCeilingHundreds(ceilingHundreds: number): string | null {
+    if (!Number.isFinite(ceilingHundreds) || ceilingHundreds < 0 || ceilingHundreds > 50) return null;
+    const upperBounds = CEILING_LEVELS_HUNDREDS_FT.slice(1);
+    for (let i = 0; i < upperBounds.length; i++) {
+      if (ceilingHundreds <= upperBounds[i]) return CEILING_FILL_COLORS[i];
+    }
+    return null;
+  }
+
+  function scalarFillColorForVisibilityMi(visibilityMi: number): string | null {
+    if (!Number.isFinite(visibilityMi) || visibilityMi < 0 || visibilityMi > 6) return null;
+    const upperBounds = VISIBILITY_LEVELS_SM.slice(1);
+    for (let i = 0; i < upperBounds.length; i++) {
+      if (visibilityMi <= upperBounds[i]) return VISIBILITY_FILL_COLORS[i];
+    }
+    return null;
+  }
+
+  function scalarFillColorForRelativeHumidity(relativeHumidity: number): string | null {
+    if (!Number.isFinite(relativeHumidity) || relativeHumidity < 0 || relativeHumidity > 100) return null;
+    if (relativeHumidity < 25) {
+      if (relativeHumidity <= RH_DRY_LEVELS[1]) return RH_DRY_COLORS[0];
+      if (relativeHumidity <= RH_DRY_LEVELS[2]) return RH_DRY_COLORS[1];
+      return RH_DRY_COLORS[2];
+    }
+    if (relativeHumidity > 90) {
+      if (relativeHumidity <= RH_MOIST_LEVELS[1]) return RH_MOIST_COLORS[0];
+      return RH_MOIST_COLORS[1];
+    }
+    return null;
+  }
+
+  function drawScalarFill(
+    pts: Array<{ x: number; y: number; val: number }>,
+    colorFn: (value: number) => string | null,
+    alpha = 0.44,
+    radiusPx = 120,
+    minNeighbors = 4,
+  ) {
+    if (pts.length < 3) return;
+
+    const fillStep = 6;
+    const nx = Math.floor(width / fillStep) + 1;
+    const ny = Math.floor(height / fillStep) + 1;
+    const gridVals = new Float32Array(nx * ny);
+    gridVals.fill(Number.NaN);
+    const localMaxRadius2 = radiusPx * radiusPx;
+
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const gx = i * fillStep;
+        const gy = j * fillStep;
+
+        const neighbors: Array<{ d2: number; val: number }> = [];
+        for (const p of pts) {
+          const dx = p.x - gx;
+          const dy = p.y - gy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > localMaxRadius2) continue;
+
+          let inserted = false;
+          for (let k = 0; k < neighbors.length; k++) {
+            if (d2 < neighbors[k].d2) {
+              neighbors.splice(k, 0, { d2, val: p.val });
+              inserted = true;
+              break;
+            }
+          }
+          if (!inserted) neighbors.push({ d2, val: p.val });
+          if (neighbors.length > kMax) neighbors.pop();
+        }
+
+        if (neighbors.length < minNeighbors) continue;
+
+        let wSum = 0;
+        let vSum = 0;
+        for (const n of neighbors) {
+          const w = 1 / Math.pow(Math.max(n.d2, 9), power / 2);
+          wSum += w;
+          vSum += w * n.val;
+        }
+        if (wSum <= 0) continue;
+
+        gridVals[j * nx + i] = vSum / wSum;
+      }
+    }
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.setLineDash([]);
+
+    const offscreen = document.createElement("canvas");
+    offscreen.width = nx;
+    offscreen.height = ny;
+    const offCtx = offscreen.getContext("2d");
+    if (!offCtx) {
+      ctx.restore();
+      return;
+    }
+
+    const image = offCtx.createImageData(nx, ny);
+    const data = image.data;
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const idx = j * nx + i;
+        const v = gridVals[idx];
+        const p = idx * 4;
+        if (!Number.isFinite(v)) {
+          data[p + 3] = 0;
+          continue;
+        }
+        const color = colorFn(v);
+        if (!color) {
+          data[p + 3] = 0;
+          continue;
+        }
+
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        data[p] = r;
+        data[p + 1] = g;
+        data[p + 2] = b;
+        data[p + 3] = 255;
+      }
+    }
+
+    offCtx.putImageData(image, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(offscreen, 0, 0, nx, ny, 0, 0, width, height);
+    ctx.restore();
+  }
+
+  function drawCeilingFill() {
+    const pts: Array<{ x: number; y: number; val: number }> = [];
+    for (const s of declutteredObs) {
+      if (isExcludedFromAnalysis(s, "ceiling")) continue;
+      // Use high fallback for "no reported ceiling" so low-ceiling pockets stay localized.
+      const ceilingHundreds = s.ceilingFt == null ? 100 : s.ceilingFt / 100;
+      const p = map.project([s.lon, s.lat]);
+      pts.push({ x: p.x, y: p.y, val: ceilingHundreds });
+    }
+    drawScalarFill(pts, scalarFillColorForCeilingHundreds, 0.44, 110, 4);
+  }
+
+  function drawVisibilityFill() {
+    const pts: Array<{ x: number; y: number; val: number }> = [];
+    for (const s of declutteredObs) {
+      if (isExcludedFromAnalysis(s, "visibility")) continue;
+      if (s.visibilityMi == null) continue;
+      const p = map.project([s.lon, s.lat]);
+      pts.push({ x: p.x, y: p.y, val: s.visibilityMi });
+    }
+    drawScalarFill(pts, scalarFillColorForVisibilityMi, 0.44, 110, 4);
+  }
+
+  function drawRelativeHumidityFill() {
+    const pts: Array<{ x: number; y: number; val: number }> = [];
+    for (const s of declutteredObs) {
+      if (isExcludedFromAnalysis(s, "humidity") || isExcludedFromAnalysis(s, "relativeHumidity")) continue;
+      if (s.relativeHumidity == null) continue;
+      const p = map.project([s.lon, s.lat]);
+      pts.push({ x: p.x, y: p.y, val: s.relativeHumidity });
+    }
+    drawScalarFill(pts, scalarFillColorForRelativeHumidity, 0.44, 110, 4);
+  }
+
   function drawWind() {
     const pts: Array<{ x: number; y: number; u: number; v: number }> = [];
   
     for (const s of declutteredObs) {
+      if (isExcludedFromAnalysis(s, "wind")) continue;
       if (s.windDirDeg == null || s.windSpeedKt == null) continue;
       const p = map.project([s.lon, s.lat]);
       const { u, v } = windToUV(s.windDirDeg, s.windSpeedKt);
@@ -1341,27 +1915,26 @@ const drawAnalysisOverlay = useCallback(() => {
     ctx.restore();
   }
 
-  function drawOne(mode: AnalysisOverlay) {
+  function drawOne(mode: "temp" | "dewpoint" | "slp") {
     // Build pts for THIS field
     const pts: Array<{ x: number; y: number; val: number }> = [];
     for (const s of declutteredObs) {
       const p = map.project([s.lon, s.lat]);
   
       if (mode === "temp") {
+        if (isExcludedFromAnalysis(s, "temp")) continue;
         if (s.tempC == null) continue;
         const val = tempUnit === "F" ? celsiusToFahrenheit(s.tempC) : s.tempC;
         pts.push({ x: p.x, y: p.y, val });
       } else if (mode === "dewpoint") {
+        if (isExcludedFromAnalysis(s, "dewpoint")) continue;
         if (s.dewpointC == null) continue;
         const val = tempUnit === "F" ? celsiusToFahrenheit(s.dewpointC) : s.dewpointC;
         pts.push({ x: p.x, y: p.y, val });
-      } else if (mode === "slp") {
+      } else {
+        if (isExcludedFromAnalysis(s, "slp")) continue;
         if (s.pressureMb == null) continue;
         pts.push({ x: p.x, y: p.y, val: s.pressureMb });
-      } else if (mode === "wind") {
-        if (s.windDirDeg == null || s.windSpeedKt == null) continue;
-        const { u, v } = windToUV(s.windDirDeg, s.windSpeedKt);
-        // store both components in val via two arrays (see below)
       }
     }
     if (pts.length < 3) return;
@@ -1473,6 +2046,10 @@ const drawAnalysisOverlay = useCallback(() => {
     }
   };
 
+    if (analysisOverlays.windSpeedFill) drawWindSpeedFill();
+    if (analysisOverlays.ceilingFill) drawCeilingFill();
+    if (analysisOverlays.visibilityFill) drawVisibilityFill();
+    if (analysisOverlays.relativeHumidityFill) drawRelativeHumidityFill();
     // draw order: pressure under, dewpoint, then temp on top
     if (analysisOverlays.slp) drawOne("slp");
     if (analysisOverlays.dewpoint) drawOne("dewpoint");
@@ -1480,7 +2057,7 @@ const drawAnalysisOverlay = useCallback(() => {
     if (analysisOverlays.wind) drawWind();
   
     ctx.globalAlpha = 1;
-  }, [analysisOverlays, declutteredObs, tempUnit, anyOverlayOn, windRenderMode]);
+  }, [analysisOverlays, declutteredObs, tempUnit, anyOverlayOn, windRenderMode, windUnit]);
 
 function windToUV(dirDeg: number, spdKt: number) {
   // METAR direction is "from" direction.
@@ -1532,13 +2109,90 @@ const exportPng = useCallback(() => {
     ctx.drawImage(c, 0, 0);
   }
 
+  // 3) optional legend cards
+  if (includeLegendInExport && activeLegendCards.length > 0) {
+    const dpr = window.devicePixelRatio || 1;
+    const scale = dpr;
+    const margin = 14 * scale;
+    const rowGap = 8 * scale;
+    const padX = 10 * scale;
+    const padY = 8 * scale;
+    const swatch = 14 * scale;
+    const swatchGap = 7 * scale;
+    const lineH = 18 * scale;
+    const titleH = 16 * scale;
+    const titleGap = 6 * scale;
+    const fontSize = 12 * scale;
+    const titleFontSize = 11 * scale;
+    const borderRadius = 8 * scale;
+
+    const drawRoundRect = (x: number, y: number, w: number, h: number, r: number) => {
+      const rr = Math.min(r, w * 0.5, h * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    };
+
+    let yBottom = height - margin;
+    ctx.textBaseline = "alphabetic";
+
+    for (let cardIdx = activeLegendCards.length - 1; cardIdx >= 0; cardIdx -= 1) {
+      const card = activeLegendCards[cardIdx];
+      ctx.font = `600 ${titleFontSize}px sans-serif`;
+      let maxTextWidth = Math.ceil(ctx.measureText(card.title).width);
+      ctx.font = `${fontSize}px sans-serif`;
+      for (const item of card.items) {
+        maxTextWidth = Math.max(maxTextWidth, Math.ceil(ctx.measureText(item.label).width));
+      }
+
+      const cardWidth = Math.max(142 * scale, padX * 2 + swatch + swatchGap + maxTextWidth);
+      const cardHeight = padY * 2 + titleH + titleGap + card.items.length * lineH;
+      const x = margin;
+      const y = yBottom - cardHeight;
+
+      drawRoundRect(x, y, cardWidth, cardHeight, borderRadius);
+      ctx.fillStyle = "rgba(2, 6, 23, 0.84)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+      ctx.lineWidth = 1 * scale;
+      ctx.stroke();
+
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = `700 ${titleFontSize}px sans-serif`;
+      ctx.fillText(card.title.toUpperCase(), x + padX, y + padY + titleH - 2 * scale);
+
+      ctx.font = `${fontSize}px sans-serif`;
+      for (let i = 0; i < card.items.length; i++) {
+        const item = card.items[i];
+        const rowY = y + padY + titleH + titleGap + i * lineH;
+        const swX = x + padX;
+        const swY = rowY + (lineH - swatch) / 2;
+        drawRoundRect(swX, swY, swatch, swatch, 3 * scale);
+        ctx.fillStyle = item.color;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.32)";
+        ctx.lineWidth = 1 * scale;
+        ctx.stroke();
+
+        ctx.fillStyle = "#e5e7eb";
+        ctx.fillText(item.label, swX + swatch + swatchGap, rowY + lineH * 0.78);
+      }
+
+      yBottom = y - rowGap;
+    }
+  }
+
   // Download
   const dataUrl = out.toDataURL("image/png");
   const a = document.createElement("a");
   a.href = dataUrl;
   a.download = `wx-mesoanalysis_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   a.click();
-}, [showStations, displayMode]);
+}, [showStations, displayMode, includeLegendInExport, activeLegendCards]);
 
 useEffect(() => {
   localStorage.setItem("showStations", String(showStations));
@@ -1553,6 +2207,18 @@ useEffect(() => {
 useEffect(() => {
   localStorage.setItem("analysisOverlays", JSON.stringify(analysisOverlays));
 }, [analysisOverlays]);
+
+useEffect(() => {
+  localStorage.setItem("windUnit", windUnit);
+}, [windUnit]);
+
+useEffect(() => {
+  localStorage.setItem("includeLegendInExport", String(includeLegendInExport));
+}, [includeLegendInExport]);
+
+useEffect(() => {
+  localStorage.setItem("geographyOverlays", JSON.stringify(geographyOverlays));
+}, [geographyOverlays]);
 
 useEffect(() => {
   if (!mapLoaded) return;
@@ -1608,119 +2274,125 @@ useEffect(() => {
           </div>
           </header>
           <div className="header-controls">
-            <div className="density-control">
-              <div className="density-title">Obs Density</div>
-                <div className="stations-toggle">
+            <div className="analysis-control">
+              <div className="analysis-title">Objective Analysis</div>
+              <details className="analysis-dropdown">
+                <summary>Analysis Layers</summary>
+                <div className="analysis-menu">
                   <label>
                     <input
                       type="checkbox"
-                      checked={showStations}
-                      onChange={(e) => setShowStations(e.target.checked)}
+                      checked={analysisOverlays.temp}
+                      onChange={(e) => setAnalysisOverlays(s => ({ ...s, temp: e.target.checked }))}
                     />
-                    Show stations
+                    Isotherms (Temp)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={analysisOverlays.dewpoint}
+                      onChange={(e) => setAnalysisOverlays(s => ({ ...s, dewpoint: e.target.checked }))}
+                    />
+                    Isodrosotherms (Dewpoint)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={analysisOverlays.slp}
+                      onChange={(e) => setAnalysisOverlays(s => ({ ...s, slp: e.target.checked }))}
+                    />
+                    Isobars (SLP)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={analysisOverlays.wind}
+                      onChange={(e) =>
+                        setAnalysisOverlays((s) => ({ ...s, wind: e.target.checked }))
+                      }
+                    />
+                    Wind (Objective)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={analysisOverlays.windSpeedFill}
+                      onChange={(e) =>
+                        setAnalysisOverlays((s) => ({ ...s, windSpeedFill: e.target.checked }))
+                      }
+                    />
+                    Wind Speed (Fill)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={analysisOverlays.ceilingFill}
+                      onChange={(e) =>
+                        setAnalysisOverlays((s) => ({ ...s, ceilingFill: e.target.checked }))
+                      }
+                    />
+                    Ceiling (Fill, &le;050)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={analysisOverlays.visibilityFill}
+                      onChange={(e) =>
+                        setAnalysisOverlays((s) => ({ ...s, visibilityFill: e.target.checked }))
+                      }
+                    />
+                    Visibility (Fill, &le;6SM)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={analysisOverlays.relativeHumidityFill}
+                      onChange={(e) =>
+                        setAnalysisOverlays((s) => ({ ...s, relativeHumidityFill: e.target.checked }))
+                      }
+                    />
+                    Relative Humidity (Critical Fill)
                   </label>
                 </div>
-              <select
-                className="density-select"
-                value={densityMode}
-                onChange={(e) => setDensityMode(e.target.value as DensityMode)}
-              >
-                <option value="sparse">Sparse</option>
-                <option value="medium">Medium</option>
-                <option value="dense">Dense</option>
-              </select>
+              </details>
             </div>
-            <div className="surface-obs-control">
-              <div className="surface-obs-title">SFC OBSERVATIONS</div>
-              <select
-                className="surface-obs-select"
-                value={displayMode}
-                onChange={(e) => setSurfaceObsMode(e.target.value as DisplayMode)}
-                disabled={!showStations}
-              >
-                <option value="plots">Station Plots</option>
-                <option value="dots">Colored Flight Rule</option>
-              </select>
-            </div>
-            <div className="analysis-control">
-              <div className="analysis-title">Objective Analysis</div>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={analysisOverlays.temp}
-                    onChange={(e) => setAnalysisOverlays(s => ({ ...s, temp: e.target.checked }))}
-                  />
-                  Isotherms (Temp)
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={analysisOverlays.dewpoint}
-                    onChange={(e) => setAnalysisOverlays(s => ({ ...s, dewpoint: e.target.checked }))}
-                  />
-                  Isodrosotherms (Dewpoint)
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={analysisOverlays.slp}
-                    onChange={(e) => setAnalysisOverlays(s => ({ ...s, slp: e.target.checked }))}
-                  />
-                  Isobars (SLP)
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={analysisOverlays.wind}
-                    onChange={(e) =>
-                      setAnalysisOverlays((s) => ({ ...s, wind: e.target.checked }))
-                    }
-                  />
-                  Wind (Objective)
-                </label>
-                {analysisOverlays.wind && (
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.8 }}>Wind Render</span>
-                    <button
-                      type="button"
-                      className={`control-btn ${windRenderMode === "barbs" ? "active" : ""}`}
-                      onClick={() => setWindRenderMode("barbs")}
-                    >
-                      Barbs
-                    </button>
-                    <button
-                      type="button"
-                      className={`control-btn ${windRenderMode === "vectors" ? "active" : ""}`}
-                      onClick={() => setWindRenderMode("vectors")}
-                    >
-                      Vectors
-                    </button>
-                  </div>
-                )}
+            <div className="geography-control">
+              <div className="geography-title">Geographies</div>
+              <details className="geography-dropdown">
+                <summary>Boundary Layers</summary>
+                <div className="geography-menu">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={geographyOverlays.adm0}
+                      onChange={(e) => setGeographyOverlays((s) => ({ ...s, adm0: e.target.checked }))}
+                    />
+                    National Boundaries (ADM0)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={geographyOverlays.adm1}
+                      onChange={(e) => setGeographyOverlays((s) => ({ ...s, adm1: e.target.checked }))}
+                    />
+                    State/Province Boundaries (ADM1)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={geographyOverlays.adm2}
+                      onChange={(e) => setGeographyOverlays((s) => ({ ...s, adm2: e.target.checked }))}
+                    />
+                    County/District Boundaries (US Counties)
+                  </label>
+                </div>
+              </details>
             </div>
             <div className="time-control">
               <div className="time-title">TIME</div>
-
-              <div className="time-row">
-                <label className="time-mode">
-                  <input
-                    type="radio"
-                    name="timelineMode"
-                    checked={timelineMode === "live"}
-                    onChange={() => { setTimelineMode("live"); setIsPlaying(false); }}
-                  />
-                  Live
-                </label>
-                <label className="time-mode">
-                  <input
-                    type="radio"
-                    name="timelineMode"
-                    checked={timelineMode === "history"}
-                    onChange={() => setTimelineMode("history")}
-                  />
-                  History
-                </label>
-              </div>
+              {timelineMode === "live" && (
+                <div className="time-mode-readout">Live mode (toggle in Options)</div>
+              )}
 
               {timelineMode === "history" && (
                 <>
@@ -1785,20 +2457,12 @@ useEffect(() => {
               )}
             </div>
             <div className="header-actions">
-              <div className="options-title">OPTIONS</div>
-                <button
-                  className={`temp-toggle-btn ${tempUnit === "F" ? "active" : ""}`}
-                  onClick={toggleTempUnit}
-                  type="button"
-                  aria-label="Toggle temperature unit"
-                >
-                  <span>°F</span>
-                  <span className="toggle-separator">/</span>
-                  <span>°C</span>
-                </button>
-                <button type="button" onClick={exportPng} className="export-btn">
-                    Download View as PNG
-                </button>
+              <button type="button" className="options-open-btn" onClick={() => setIsOptionsOpen(true)}>
+                Open Options
+              </button>
+              <button type="button" onClick={exportPng} className="export-btn">
+                Download View as PNG
+              </button>
             </div>
           </div>
 
@@ -1853,6 +2517,66 @@ useEffect(() => {
               />
             )}
 
+            {(analysisOverlays.windSpeedFill
+              || analysisOverlays.ceilingFill
+              || analysisOverlays.visibilityFill
+              || analysisOverlays.relativeHumidityFill) && (
+              <div className="analysis-legends">
+                {analysisOverlays.windSpeedFill && (
+                  <div className="analysis-legend">
+                    <div className="wind-fill-legend-title">Wind Speed ({windUnit})</div>
+                    <ul className="wind-fill-legend-list">
+                      {windFillLegend.map((item, idx) => (
+                        <li key={`wind-fill-${idx}`}>
+                          <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
+                          <span>{item.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {analysisOverlays.ceilingFill && (
+                  <div className="analysis-legend">
+                    <div className="wind-fill-legend-title">Ceiling (hundreds ft)</div>
+                    <ul className="wind-fill-legend-list">
+                      {ceilingFillLegend.map((item, idx) => (
+                        <li key={`ceiling-fill-${idx}`}>
+                          <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
+                          <span>{item.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {analysisOverlays.visibilityFill && (
+                  <div className="analysis-legend">
+                    <div className="wind-fill-legend-title">Visibility (SM)</div>
+                    <ul className="wind-fill-legend-list">
+                      {visibilityFillLegend.map((item, idx) => (
+                        <li key={`visibility-fill-${idx}`}>
+                          <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
+                          <span>{item.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {analysisOverlays.relativeHumidityFill && (
+                  <div className="analysis-legend">
+                    <div className="wind-fill-legend-title">RH Critical (%)</div>
+                    <ul className="wind-fill-legend-list">
+                      {relativeHumidityLegend.map((item, idx) => (
+                        <li key={`rh-fill-${idx}`}>
+                          <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
+                          <span>{item.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
             <MapGL
               preserveDrawingBuffer={true}
               onLoad={() => setMapLoaded(true)}
@@ -1896,6 +2620,21 @@ useEffect(() => {
               }}
             >
               <NavigationControl position="top-left" />
+              {geographyOverlays.adm0 && (
+                <Source id="adm0-boundaries" type="geojson" data={ADM0_BOUNDARIES_URL}>
+                  <Layer {...adm0BoundaryLayer} />
+                </Source>
+              )}
+              {geographyOverlays.adm1 && (
+                <Source id="adm1-boundaries" type="geojson" data={ADM1_BOUNDARIES_URL}>
+                  <Layer {...adm1BoundaryLayer} />
+                </Source>
+              )}
+              {geographyOverlays.adm2 && (
+                <Source id="adm2-boundaries" type="geojson" data={ADM2_BOUNDARIES_URL}>
+                  <Layer {...adm2BoundaryLayer} />
+                </Source>
+              )}
               <Source id="stations" type="geojson" data={stationsGeoJson}>
                 {displayMode === "dots" && <Layer {...unclusteredLayer} key="dots-layer" />}
                 {displayMode === "plots" && <Layer {...hitTargetsLayer} key="hit-layer" />}
@@ -1936,13 +2675,14 @@ useEffect(() => {
                         <div className="obs-item-main">
                           <strong>{s.id}</strong> - {s.name} – {formatTempDetailed(s.tempC)}
                           {s.dewpointC !== null && formatDewpoint(s.dewpointC)}
+                          {hasQcFlags(s) && <span className="qc-badge-inline">QC</span>}
                           {s.windSpeedKt !== null && (
                             <span className="wind-info">
                               {" "}
                               {s.windDirDeg !== null
                                 ? `${Math.round(s.windDirDeg)}°`
                                 : ""}{" "}
-                              {s.windSpeedKt.toFixed(0)}kt
+                              {formatWindSpeedCompact(s.windSpeedKt)}
                             </span>
                           )}
                         </div>
@@ -1965,6 +2705,20 @@ useEffect(() => {
                               <span className={obsAgeClass(s.obsTimeUtc)}>
                                 {new Date(s.obsTimeUtc).toLocaleString()} ({formatAge(s.obsTimeUtc)})
                               </span>
+                            </div>
+                          )}
+
+                          {hasQcFlags(s) && (
+                            <div className="detail-section">
+                              <div className="detail-section-title">Data Quality</div>
+                              <div className="qc-summary">
+                                Potentially bad data flagged.
+                              </div>
+                              <ul className="qc-list">
+                                {(s.qcFlags ?? []).map((flag, idx) => (
+                                  <li key={`${s.id}-qc-${idx}`}>{flag}</li>
+                                ))}
+                              </ul>
                             </div>
                           )}
                           
@@ -2035,12 +2789,12 @@ useEffect(() => {
                               <>
                                 <div className="detail-row">
                                   <span className="detail-label">Wind Speed:</span>
-                                  <span>{s.windSpeedKt.toFixed(1)} kt</span>
+                                  <span>{formatWindSpeed(s.windSpeedKt)}</span>
                                 </div>
                                 {s.windGustKt !== null && (
                                   <div className="detail-row">
                                     <span className="detail-label">Wind Gust:</span>
-                                    <span>{s.windGustKt.toFixed(1)} kt</span>
+                                    <span>{formatWindSpeed(s.windGustKt)}</span>
                                   </div>
                                 )}
                                 {s.windDirDeg !== null && (
@@ -2133,6 +2887,152 @@ useEffect(() => {
         </aside>
       </main>
 
+      {isOptionsOpen && (
+        <div className="options-overlay" onClick={() => setIsOptionsOpen(false)}>
+          <div className="options-content" onClick={(e) => e.stopPropagation()}>
+            <div className="options-header">
+              <h3>Options</h3>
+              <button
+                className="options-close"
+                onClick={() => setIsOptionsOpen(false)}
+                aria-label="Close options"
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="options-body">
+              <div className="options-section">
+                <div className="options-section-title">Display</div>
+                <label className="options-check">
+                  <input
+                    type="checkbox"
+                    checked={showStations}
+                    onChange={(e) => setShowStations(e.target.checked)}
+                  />
+                  Show stations
+                </label>
+                <label className="options-label">Obs Density</label>
+                <select
+                  className="density-select"
+                  value={densityMode}
+                  onChange={(e) => setDensityMode(e.target.value as DensityMode)}
+                >
+                  <option value="sparse">Sparse</option>
+                  <option value="medium">Medium</option>
+                  <option value="dense">Dense</option>
+                </select>
+                <label className="options-label">Surface Observation Mode</label>
+                <select
+                  className="surface-obs-select"
+                  value={displayMode}
+                  onChange={(e) => setSurfaceObsMode(e.target.value as DisplayMode)}
+                  disabled={!showStations}
+                >
+                  <option value="plots">Station Plots</option>
+                  <option value="dots">Colored Flight Rule</option>
+                </select>
+              </div>
+
+              <div className="options-section">
+                <div className="options-section-title">Timeline</div>
+                <div className="time-row">
+                  <label className="time-mode">
+                    <input
+                      type="radio"
+                      name="timelineModeOptions"
+                      checked={timelineMode === "live"}
+                      onChange={() => { setTimelineMode("live"); setIsPlaying(false); }}
+                    />
+                    Live
+                  </label>
+                  <label className="time-mode">
+                    <input
+                      type="radio"
+                      name="timelineModeOptions"
+                      checked={timelineMode === "history"}
+                      onChange={() => setTimelineMode("history")}
+                    />
+                    History
+                  </label>
+                </div>
+              </div>
+
+              <div className="options-section">
+                <div className="options-section-title">Wind</div>
+                <label className="options-label">Objective Wind Render</label>
+                <div className="wind-unit-row">
+                  <button
+                    type="button"
+                    className={`control-btn ${windRenderMode === "barbs" ? "active" : ""}`}
+                    onClick={() => setWindRenderMode("barbs")}
+                  >
+                    Barbs
+                  </button>
+                  <button
+                    type="button"
+                    className={`control-btn ${windRenderMode === "vectors" ? "active" : ""}`}
+                    onClick={() => setWindRenderMode("vectors")}
+                  >
+                    Vectors
+                  </button>
+                </div>
+                <label className="options-label">Wind Units</label>
+                <div className="wind-unit-row">
+                  <button
+                    type="button"
+                    className={`control-btn ${windUnit === "KT" ? "active" : ""}`}
+                    onClick={() => setWindUnit("KT")}
+                  >
+                    KT
+                  </button>
+                  <button
+                    type="button"
+                    className={`control-btn ${windUnit === "MPH" ? "active" : ""}`}
+                    onClick={() => setWindUnit("MPH")}
+                  >
+                    MPH
+                  </button>
+                  <button
+                    type="button"
+                    className={`control-btn ${windUnit === "KPH" ? "active" : ""}`}
+                    onClick={() => setWindUnit("KPH")}
+                  >
+                    KPH
+                  </button>
+                </div>
+              </div>
+
+              <div className="options-section">
+                <div className="options-section-title">Units</div>
+                <button
+                  className={`temp-toggle-btn ${tempUnit === "F" ? "active" : ""}`}
+                  onClick={toggleTempUnit}
+                  type="button"
+                  aria-label="Toggle temperature unit"
+                >
+                  <span>°F</span>
+                  <span className="toggle-separator">/</span>
+                  <span>°C</span>
+                </button>
+              </div>
+
+              <div className="options-section">
+                <div className="options-section-title">Export</div>
+                <label className="options-check">
+                  <input
+                    type="checkbox"
+                    checked={includeLegendInExport}
+                    onChange={(e) => setIncludeLegendInExport(e.target.checked)}
+                  />
+                  Include active legends in PNG download
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Station Details Popup */}
       {selectedStation && (
         <div className="popup-overlay" onClick={closePopup}>
@@ -2145,12 +3045,28 @@ useEffect(() => {
                       {new Date(selectedStation.obsTimeUtc).toLocaleString()} ({formatAge(selectedStation.obsTimeUtc)})
                     </p>
                   )}
+                  {hasQcFlags(selectedStation) && (
+                    <div className="qc-banner">
+                      Potentially bad data flagged for analysis.
+                    </div>
+                  )}
               </div>
               <button className="popup-close" onClick={closePopup} aria-label="Close">
                 ×
               </button>
             </div>
             <div className="popup-body">
+              {hasQcFlags(selectedStation) && (
+                <div className="detail-section">
+                  <div className="detail-section-title">Data Quality</div>
+                  <ul className="qc-list">
+                    {(selectedStation.qcFlags ?? []).map((flag, idx) => (
+                      <li key={`${selectedStation.id}-popup-qc-${idx}`}>{flag}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="detail-section">
                 <div className="detail-section-title">Flight Conditions</div>
                 <div className="detail-row">
@@ -2218,12 +3134,12 @@ useEffect(() => {
                   <>
                     <div className="detail-row">
                       <span className="detail-label">Wind Speed:</span>
-                      <span>{selectedStation.windSpeedKt.toFixed(1)} kt</span>
+                      <span>{formatWindSpeed(selectedStation.windSpeedKt)}</span>
                     </div>
                     {selectedStation.windGustKt !== null && (
                       <div className="detail-row">
                         <span className="detail-label">Wind Gust:</span>
-                        <span>{selectedStation.windGustKt.toFixed(1)} kt</span>
+                        <span>{formatWindSpeed(selectedStation.windGustKt)}</span>
                       </div>
                     )}
                     {selectedStation.windDirDeg !== null && (
@@ -2314,5 +3230,3 @@ useEffect(() => {
 }
 
 export default App;
-
-

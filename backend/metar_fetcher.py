@@ -5,7 +5,7 @@ Fetches current METAR observations and parses them into our format.
 import requests
 import csv
 from io import StringIO
-from typing import List, Optional
+from typing import List, Optional, Set
 from datetime import datetime, timezone
 from pathlib import Path
 import logging
@@ -14,6 +14,20 @@ from metpy.calc import altimeter_to_sea_level_pressure
 from metpy.units import units
 
 logger = logging.getLogger(__name__)
+
+ALTIMETER_MIN_INHG = 24.0
+ALTIMETER_MAX_INHG = 33.0
+PRESSURE_MIN_MB = 870.0
+PRESSURE_MAX_MB = 1085.0
+TEMP_MIN_C = -90.0
+TEMP_MAX_C = 60.0
+DEWPOINT_MIN_C = -100.0
+DEWPOINT_MAX_C = 50.0
+WIND_SPEED_MAX_KT = 200.0
+WIND_GUST_MAX_KT = 250.0
+VISIBILITY_MAX_MI = 100.0
+RELH_MIN = 0.0
+RELH_MAX = 100.0
 
 # Iowa State IEM CSV service endpoint (more reliable than JSON API)
 IEM_CSV_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
@@ -86,6 +100,19 @@ def calculate_flight_rule(visibility_mi: Optional[float], ceiling_ft: Optional[f
             return "IFR"
         else:
             return "MVFR"
+
+
+def _flag_qc(
+    qc_flags: List[str],
+    excluded_fields: Set[str],
+    field: str,
+    reason: str,
+    exclude_from_analysis: bool = True,
+) -> None:
+    msg = f"{field}: {reason}"
+    qc_flags.append(msg)
+    if exclude_from_analysis:
+        excluded_fields.add(field)
 
 
 def fetch_station_metadata() -> dict:
@@ -235,6 +262,9 @@ def fetch_current_metars() -> List[dict]:
                 if station_id in seen_stations:
                     continue
                 seen_stations.add(station_id)
+
+                qc_flags: List[str] = []
+                analysis_exclude_fields: Set[str] = set()
                 
                 # Extract observation valid time (IEM "valid" looks like "YYYY-MM-DD HH:MM" UTC)
                 obs_time = None
@@ -282,6 +312,14 @@ def fetch_current_metars() -> List[dict]:
                 temp_c = fahrenheit_to_celsius(temp_f)
                 if temp_c is None:
                     continue  # Skip if no temperature
+
+                if temp_c < TEMP_MIN_C or temp_c > TEMP_MAX_C:
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "temp",
+                        f"value {temp_c:.1f}C out of plausible range ({TEMP_MIN_C:.1f}..{TEMP_MAX_C:.1f})",
+                    )
                 
                 # Extract dewpoint (in Fahrenheit, convert to Celsius)
                 dewpoint_f = None
@@ -293,6 +331,21 @@ def fetch_current_metars() -> List[dict]:
                     pass
                 
                 dewpoint_c = fahrenheit_to_celsius(dewpoint_f)
+                if dewpoint_c is not None:
+                    if dewpoint_c < DEWPOINT_MIN_C or dewpoint_c > DEWPOINT_MAX_C:
+                        _flag_qc(
+                            qc_flags,
+                            analysis_exclude_fields,
+                            "dewpoint",
+                            f"value {dewpoint_c:.1f}C out of plausible range ({DEWPOINT_MIN_C:.1f}..{DEWPOINT_MAX_C:.1f})",
+                        )
+                    if dewpoint_c > temp_c + 1.0:
+                        _flag_qc(
+                            qc_flags,
+                            analysis_exclude_fields,
+                            "dewpoint",
+                            f"value {dewpoint_c:.1f}C exceeds temperature {temp_c:.1f}C by >1C",
+                        )
                 
                 # Extract wind direction and speed
                 wind_dir_deg = None
@@ -302,6 +355,13 @@ def fetch_current_metars() -> List[dict]:
                         wind_dir_deg = float(drct_str)
                 except (ValueError, TypeError):
                     pass
+                if wind_dir_deg is not None and (wind_dir_deg < 0 or wind_dir_deg > 360):
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "wind",
+                        f"direction {wind_dir_deg:.0f}deg out of plausible range (0..360)",
+                    )
                 
                 wind_speed_kt = None
                 try:
@@ -310,6 +370,13 @@ def fetch_current_metars() -> List[dict]:
                         wind_speed_kt = float(sknt_str)
                 except (ValueError, TypeError):
                     pass
+                if wind_speed_kt is not None and (wind_speed_kt < 0 or wind_speed_kt > WIND_SPEED_MAX_KT):
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "wind",
+                        f"speed {wind_speed_kt:.1f}kt out of plausible range (0..{WIND_SPEED_MAX_KT:.0f})",
+                    )
                 
                 # Extract wind gust
                 wind_gust_kt = None
@@ -319,6 +386,20 @@ def fetch_current_metars() -> List[dict]:
                         wind_gust_kt = float(gust_str)
                 except (ValueError, TypeError):
                     pass
+                if wind_gust_kt is not None and (wind_gust_kt < 0 or wind_gust_kt > WIND_GUST_MAX_KT):
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "wind",
+                        f"gust {wind_gust_kt:.1f}kt out of plausible range (0..{WIND_GUST_MAX_KT:.0f})",
+                    )
+                if wind_speed_kt is not None and wind_gust_kt is not None and wind_gust_kt + 0.1 < wind_speed_kt:
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "wind",
+                        f"gust {wind_gust_kt:.1f}kt lower than sustained wind {wind_speed_kt:.1f}kt",
+                    )
                 
                 # Extract visibility (in miles)
                 visibility_mi = None
@@ -328,6 +409,14 @@ def fetch_current_metars() -> List[dict]:
                         visibility_mi = float(vsby_str)
                 except (ValueError, TypeError):
                     pass
+                if visibility_mi is not None and (visibility_mi < 0 or visibility_mi > VISIBILITY_MAX_MI):
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "visibility",
+                        f"value {visibility_mi:.2f}mi out of plausible range (0..{VISIBILITY_MAX_MI:.0f})",
+                        exclude_from_analysis=False,
+                    )
                 
                 # Extract ceiling (lowest broken/overcast layer in feet)
                 ceiling_ft = None
@@ -361,6 +450,20 @@ def fetch_current_metars() -> List[dict]:
                         altimeter_inhg = float(alti_str)
                 except (ValueError, TypeError):
                     pass
+                altimeter_is_plausible = True
+                if altimeter_inhg is not None and (
+                    altimeter_inhg < ALTIMETER_MIN_INHG or altimeter_inhg > ALTIMETER_MAX_INHG
+                ):
+                    altimeter_is_plausible = False
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "slp",
+                        (
+                            f"altimeter {altimeter_inhg:.2f}inHg out of plausible range "
+                            f"({ALTIMETER_MIN_INHG:.2f}..{ALTIMETER_MAX_INHG:.2f})"
+                        ),
+                    )
                 
                 # Extract pressure (millibars)
                 pressure_mb = None
@@ -371,9 +474,25 @@ def fetch_current_metars() -> List[dict]:
                         pressure_mb = float(mslp_str)
                 except (ValueError, TypeError):
                     pass
+                if pressure_mb is not None and (pressure_mb < PRESSURE_MIN_MB or pressure_mb > PRESSURE_MAX_MB):
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "slp",
+                        (
+                            f"pressure {pressure_mb:.1f}mb out of plausible range "
+                            f"({PRESSURE_MIN_MB:.0f}..{PRESSURE_MAX_MB:.0f})"
+                        ),
+                    )
                 
                 # Compute sea-level pressure if missing and we have required data
-                if pressure_mb is None and altimeter_inhg is not None and temp_c is not None and elevation_m is not None:
+                if (
+                    pressure_mb is None
+                    and altimeter_inhg is not None
+                    and altimeter_is_plausible
+                    and temp_c is not None
+                    and elevation_m is not None
+                ):
                     try:
                         altimeter_pa = (altimeter_inhg * units.inch_Hg).to(units.pascal)
                         temp_k = (temp_c * units.degC).to(units.kelvin)
@@ -393,6 +512,16 @@ def fetch_current_metars() -> List[dict]:
                         relative_humidity = float(relh_str)
                 except (ValueError, TypeError):
                     pass
+                if relative_humidity is not None and (
+                    relative_humidity < RELH_MIN or relative_humidity > RELH_MAX
+                ):
+                    _flag_qc(
+                        qc_flags,
+                        analysis_exclude_fields,
+                        "humidity",
+                        f"value {relative_humidity:.1f}% out of plausible range ({RELH_MIN:.0f}..{RELH_MAX:.0f})",
+                        exclude_from_analysis=False,
+                    )
                 
                 # Extract weather codes
                 weather_codes = row.get("wxcodes", "").strip()
@@ -405,6 +534,9 @@ def fetch_current_metars() -> List[dict]:
                 
                 # Get station name from metadata, fallback to station ID
                 station_name = station_metadata.get(station_id, station_id)
+
+                if qc_flags:
+                    logger.debug("QC flags for %s: %s", station_id, "; ".join(qc_flags))
                 
                 observations.append({
                     "id": station_id,
@@ -427,6 +559,8 @@ def fetch_current_metars() -> List[dict]:
                     "weatherCodes": weather_codes if weather_codes else None,
                     "flightRule": flight_rule,
                     "rawMetar": raw_metar if raw_metar else None,
+                    "qcFlags": qc_flags,
+                    "analysisExcludeFields": sorted(analysis_exclude_fields),
                 })
             
             logger.info(f"Successfully fetched and parsed {len(observations)} METAR observations")
@@ -451,4 +585,3 @@ def fetch_current_metars() -> List[dict]:
     # If we get here, all retries failed
     logger.error(f"Failed to fetch METARs after {max_retries} attempts")
     return []
-
