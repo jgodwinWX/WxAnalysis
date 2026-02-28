@@ -503,6 +503,23 @@
   color: #cbd5e1;
 }
 
+.analysis-subsection-title {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.analysis-subsection-title:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 .geography-title {
   font-size: 0.75rem;
   font-weight: 600;
@@ -574,12 +591,84 @@
   opacity: 0.55;
 }
 
+.view-submenu {
+  border: 1px solid rgba(71, 85, 105, 0.55);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.view-submenu > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 0.36rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #bfdbfe;
+}
+
+.view-submenu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.view-submenu-content {
+  display: grid;
+  gap: 6px;
+  padding: 0.35rem 0.4rem 0.45rem;
+}
+
+.view-item-list,
+.view-item-grid {
+  display: grid;
+  gap: 4px;
+  padding: 0.35rem 0.4rem 0.45rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.view-item-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.view-item-btn {
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  background: rgba(2, 6, 23, 0.78);
+  color: #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.28rem 0.45rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.view-item-grid .view-item-btn {
+  text-align: center;
+}
+
+.view-item-btn:hover {
+  border-color: rgba(96, 165, 250, 0.65);
+  background: rgba(30, 58, 138, 0.25);
+  color: #dbeafe;
+}
+
+.view-item-btn.active {
+  border-color: rgba(96, 165, 250, 0.85);
+  background: rgba(30, 64, 175, 0.38);
+  color: #dbeafe;
+}
+
 .time-control {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   width: 260px;
+}
+
+.time-slider {
+  width: 100%;
 }
 
 .time-title {
@@ -1137,6 +1226,26 @@
   color: #e5e7eb;
   min-width: 142px;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
+}
+
+.valid-time-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 42;
+  pointer-events: none;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(2, 6, 23, 0.82);
+  color: #e5e7eb;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
 }
 
 .wind-fill-legend-title {

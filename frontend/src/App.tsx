@@ -34,6 +34,7 @@ type SurfaceObs = {
 
 type TempUnit = "F" | "C";
 type WindUnit = "KT" | "MPH" | "KPH";
+type DisplayTimeZone = "UTC" | "LOCAL";
 
 const WIND_FILL_BINS_KT = [0, 5, 10, 15, 20, 30, 40, 60, Number.POSITIVE_INFINITY];
 const WIND_FILL_COLORS = [
@@ -78,7 +79,128 @@ const ADM1_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson";
 const ADM2_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json";
+const ARTCC_BOUNDARIES_URL = "/api/geography/artcc";
 const HISTORY_WINDOW_MINUTES = 360;
+const CHANGE_WINDOW_HOURS = 24;
+
+const DELTA_SLP_NEG_CUTS = [-16, -12, -8, -4];
+const DELTA_SLP_POS_CUTS = [4, 8, 12, 16];
+const DELTA_SLP_NEG_COLORS = ["#4c1d95", "#6d28d9", "#7c3aed", "#8b5cf6"]; // falls -> purple
+const DELTA_SLP_POS_COLORS = ["#fdb863", "#f59e0b", "#d97706", "#92400e"]; // rises -> orange
+
+const DELTA_TEMP_CUTS_F = { neg: [-20, -12, -8, -4], pos: [4, 8, 12, 20] };
+const DELTA_TEMP_CUTS_C = { neg: [-10, -6, -4, -2], pos: [2, 4, 6, 10] };
+const DELTA_TEMP_NEG_COLORS = ["#08306b", "#08519c", "#2171b5", "#6baed6"]; // cooling -> blue
+const DELTA_TEMP_POS_COLORS = ["#fcae91", "#fb6a4a", "#de2d26", "#a50f15"]; // warming -> red
+
+const DELTA_DEWPOINT_NEG_COLORS = ["#92400e", "#b45309", "#ea580c", "#fb923c"]; // drying -> warm
+const DELTA_DEWPOINT_POS_COLORS = ["#93c5fd", "#60a5fa", "#3b82f6", "#1d4ed8"]; // moistening -> cool
+
+const DELTA_THETAE_NEG_CUTS = [-10, -6, -4, -2];
+const DELTA_THETAE_POS_CUTS = [2, 4, 6, 10];
+const DELTA_THETAE_NEG_COLORS = ["#543005", "#8c510a", "#bf812d", "#dfc27d"];
+const DELTA_THETAE_POS_COLORS = ["#c7eae5", "#80cdc1", "#35978f", "#01665e"];
+
+type PresetView = {
+  id: string;
+  label: string;
+  lon: number;
+  lat: number;
+  zoom: number;
+};
+
+const REGION_VIEWS: PresetView[] = [
+  { id: "region-conus", label: "CONUS", lon: -98.5, lat: 39.8, zoom: 4.2 },
+  { id: "region-midwest", label: "Midwest", lon: -93.5, lat: 41.5, zoom: 5.5 },
+  { id: "region-northeast", label: "Northeast", lon: -74.5, lat: 42.5, zoom: 5.7 },
+  { id: "region-northwest", label: "Northwest", lon: -120.5, lat: 46.5, zoom: 5.4 },
+  { id: "region-south-central", label: "South-Central", lon: -97.0, lat: 32.5, zoom: 5.5 },
+  { id: "region-southeast", label: "Southeast", lon: -83.5, lat: 33.0, zoom: 5.6 },
+  { id: "region-southwest", label: "Southwest", lon: -112.0, lat: 34.0, zoom: 5.4 },
+];
+
+const STATE_TERRITORY_VIEWS: PresetView[] = [
+  { id: "state-AK", label: "AK", lon: -152.4, lat: 64.5, zoom: 3.7 },
+  { id: "state-AL", label: "AL", lon: -86.8, lat: 32.8, zoom: 6.6 },
+  { id: "state-AR", label: "AR", lon: -92.3, lat: 34.9, zoom: 6.6 },
+  { id: "state-AS", label: "AS", lon: -170.7, lat: -14.3, zoom: 8.3 },
+  { id: "state-AZ", label: "AZ", lon: -111.7, lat: 34.2, zoom: 6.2 },
+  { id: "state-CA", label: "CA", lon: -119.5, lat: 37.2, zoom: 5.5 },
+  { id: "state-CO", label: "CO", lon: -105.5, lat: 39.0, zoom: 6.2 },
+  { id: "state-CT", label: "CT", lon: -72.7, lat: 41.6, zoom: 7.8 },
+  { id: "state-DC", label: "DC", lon: -77.03, lat: 38.9, zoom: 9.2 },
+  { id: "state-DE", label: "DE", lon: -75.5, lat: 39.0, zoom: 8.1 },
+  { id: "state-FL", label: "FL", lon: -82.4, lat: 28.6, zoom: 6.0 },
+  { id: "state-GA", label: "GA", lon: -83.5, lat: 32.6, zoom: 6.4 },
+  { id: "state-GU", label: "GU", lon: 144.8, lat: 13.45, zoom: 9.0 },
+  { id: "state-HI", label: "HI", lon: -157.9, lat: 20.8, zoom: 6.2 },
+  { id: "state-IA", label: "IA", lon: -93.5, lat: 42.1, zoom: 6.6 },
+  { id: "state-ID", label: "ID", lon: -114.4, lat: 44.2, zoom: 6.1 },
+  { id: "state-IL", label: "IL", lon: -89.3, lat: 40.0, zoom: 6.4 },
+  { id: "state-IN", label: "IN", lon: -86.2, lat: 39.9, zoom: 6.7 },
+  { id: "state-KS", label: "KS", lon: -98.2, lat: 38.5, zoom: 6.3 },
+  { id: "state-KY", label: "KY", lon: -84.9, lat: 37.8, zoom: 6.7 },
+  { id: "state-LA", label: "LA", lon: -91.8, lat: 30.9, zoom: 6.7 },
+  { id: "state-MA", label: "MA", lon: -71.8, lat: 42.2, zoom: 7.2 },
+  { id: "state-MD", label: "MD", lon: -76.7, lat: 39.0, zoom: 7.3 },
+  { id: "state-ME", label: "ME", lon: -69.1, lat: 45.3, zoom: 6.4 },
+  { id: "state-MI", label: "MI", lon: -85.5, lat: 44.3, zoom: 5.8 },
+  { id: "state-MN", label: "MN", lon: -94.6, lat: 46.2, zoom: 5.9 },
+  { id: "state-MO", label: "MO", lon: -92.5, lat: 38.4, zoom: 6.4 },
+  { id: "state-MP", label: "MP", lon: 145.7, lat: 15.2, zoom: 8.7 },
+  { id: "state-MS", label: "MS", lon: -89.8, lat: 32.8, zoom: 6.7 },
+  { id: "state-MT", label: "MT", lon: -110.3, lat: 46.9, zoom: 5.7 },
+  { id: "state-NC", label: "NC", lon: -79.4, lat: 35.4, zoom: 6.3 },
+  { id: "state-ND", label: "ND", lon: -100.5, lat: 47.5, zoom: 6.0 },
+  { id: "state-NE", label: "NE", lon: -99.8, lat: 41.5, zoom: 6.3 },
+  { id: "state-NH", label: "NH", lon: -71.5, lat: 43.9, zoom: 7.2 },
+  { id: "state-NJ", label: "NJ", lon: -74.5, lat: 40.1, zoom: 7.7 },
+  { id: "state-NM", label: "NM", lon: -106.1, lat: 34.4, zoom: 6.2 },
+  { id: "state-NV", label: "NV", lon: -117.0, lat: 39.3, zoom: 5.9 },
+  { id: "state-NY", label: "NY", lon: -75.2, lat: 42.9, zoom: 6.1 },
+  { id: "state-OH", label: "OH", lon: -82.8, lat: 40.3, zoom: 6.5 },
+  { id: "state-OK", label: "OK", lon: -97.5, lat: 35.6, zoom: 6.4 },
+  { id: "state-OR", label: "OR", lon: -120.6, lat: 43.9, zoom: 6.0 },
+  { id: "state-PA", label: "PA", lon: -77.8, lat: 40.9, zoom: 6.4 },
+  { id: "state-PR", label: "PR", lon: -66.4, lat: 18.2, zoom: 8.1 },
+  { id: "state-RI", label: "RI", lon: -71.5, lat: 41.7, zoom: 8.8 },
+  { id: "state-SC", label: "SC", lon: -80.8, lat: 33.8, zoom: 7.0 },
+  { id: "state-SD", label: "SD", lon: -100.3, lat: 44.3, zoom: 6.0 },
+  { id: "state-TN", label: "TN", lon: -86.3, lat: 35.8, zoom: 6.7 },
+  { id: "state-TX", label: "TX", lon: -99.4, lat: 31.1, zoom: 5.5 },
+  { id: "state-UT", label: "UT", lon: -111.6, lat: 39.4, zoom: 6.2 },
+  { id: "state-VA", label: "VA", lon: -78.7, lat: 37.6, zoom: 6.4 },
+  { id: "state-VI", label: "VI", lon: -64.75, lat: 18.33, zoom: 9.0 },
+  { id: "state-VT", label: "VT", lon: -72.7, lat: 44.0, zoom: 7.3 },
+  { id: "state-WA", label: "WA", lon: -120.6, lat: 47.4, zoom: 6.0 },
+  { id: "state-WI", label: "WI", lon: -89.8, lat: 44.6, zoom: 6.3 },
+  { id: "state-WV", label: "WV", lon: -80.6, lat: 38.6, zoom: 7.0 },
+  { id: "state-WY", label: "WY", lon: -107.5, lat: 43.0, zoom: 6.0 },
+];
+
+const ARTCC_VIEWS: PresetView[] = [
+  { id: "artcc-ZAB", label: "ZAB", lon: -106.1, lat: 34.3, zoom: 6.0 },
+  { id: "artcc-ZAN", label: "ZAN", lon: -150.0, lat: 63.0, zoom: 3.9 },
+  { id: "artcc-ZAU", label: "ZAU", lon: -88.0, lat: 41.7, zoom: 6.2 },
+  { id: "artcc-ZBW", label: "ZBW", lon: -71.0, lat: 43.0, zoom: 6.2 },
+  { id: "artcc-ZDC", label: "ZDC", lon: -77.0, lat: 38.5, zoom: 6.4 },
+  { id: "artcc-ZDV", label: "ZDV", lon: -104.7, lat: 39.5, zoom: 6.0 },
+  { id: "artcc-ZFW", label: "ZFW", lon: -97.0, lat: 32.8, zoom: 6.0 },
+  { id: "artcc-ZHU", label: "ZHU", lon: -95.3, lat: 29.8, zoom: 6.2 },
+  { id: "artcc-ZID", label: "ZID", lon: -86.2, lat: 39.8, zoom: 6.3 },
+  { id: "artcc-ZJX", label: "ZJX", lon: -82.2, lat: 30.4, zoom: 6.5 },
+  { id: "artcc-ZKC", label: "ZKC", lon: -95.6, lat: 39.1, zoom: 6.3 },
+  { id: "artcc-ZLA", label: "ZLA", lon: -118.2, lat: 34.1, zoom: 6.0 },
+  { id: "artcc-ZLC", label: "ZLC", lon: -111.9, lat: 40.8, zoom: 6.1 },
+  { id: "artcc-ZMA", label: "ZMA", lon: -80.3, lat: 25.8, zoom: 6.8 },
+  { id: "artcc-ZME", label: "ZME", lon: -90.1, lat: 35.1, zoom: 6.3 },
+  { id: "artcc-ZMP", label: "ZMP", lon: -93.2, lat: 45.0, zoom: 6.1 },
+  { id: "artcc-ZNY", label: "ZNY", lon: -74.8, lat: 41.0, zoom: 6.7 },
+  { id: "artcc-ZOA", label: "ZOA", lon: -121.5, lat: 37.6, zoom: 6.0 },
+  { id: "artcc-ZOB", label: "ZOB", lon: -81.7, lat: 41.4, zoom: 6.4 },
+  { id: "artcc-ZSE", label: "ZSE", lon: -122.3, lat: 47.6, zoom: 6.0 },
+  { id: "artcc-ZTL", label: "ZTL", lon: -84.4, lat: 33.8, zoom: 6.5 },
+];
 
 function celsiusToFahrenheit(c: number): number {
   return (c * 9) / 5 + 32;
@@ -169,6 +291,10 @@ type AnalysisGridStore = {
   mixingRatio?: ScalarGrid;
   thetaE?: ScalarGrid;
   moistureConvergence?: ScalarGrid;
+  deltaSlp24h?: ScalarGrid;
+  deltaTemp24h?: ScalarGrid;
+  deltaDewpoint24h?: ScalarGrid;
+  deltaThetaE24h?: ScalarGrid;
   windVector?: VectorGrid;
 };
 
@@ -290,6 +416,50 @@ function gaussianBlurNaN(values: Float32Array, nx: number, ny: number, passes = 
   return src;
 }
 
+function divergingColorForDelta(
+  value: number,
+  negCuts: number[],
+  posCuts: number[],
+  negColors: string[],
+  posColors: string[]
+): string | null {
+  if (!Number.isFinite(value)) return null;
+  if (value < 0) {
+    for (let i = 0; i < negCuts.length; i++) {
+      if (value <= negCuts[i]) return negColors[i];
+    }
+    return null;
+  }
+  if (value > 0) {
+    for (let i = posCuts.length - 1, c = posColors.length - 1; i >= 0; i--, c--) {
+      if (value >= posCuts[i]) return posColors[Math.max(0, c)];
+    }
+    return null;
+  }
+  return null;
+}
+
+function makeDivergingLegend(
+  negCuts: number[],
+  posCuts: number[],
+  negColors: string[],
+  posColors: string[],
+  unitLabel: string
+): Array<{ color: string; label: string }> {
+  return [
+    // Positive bins first (top of legend), strongest at top.
+    { color: posColors[3], label: `> +${posCuts[3]} ${unitLabel}` },
+    { color: posColors[2], label: `+${posCuts[2]}..+${posCuts[3]} ${unitLabel}` },
+    { color: posColors[1], label: `+${posCuts[1]}..+${posCuts[2]} ${unitLabel}` },
+    { color: posColors[0], label: `+${posCuts[0]}..+${posCuts[1]} ${unitLabel}` },
+    // Negative bins last (bottom of legend), strongest at bottom.
+    { color: negColors[3], label: `${negCuts[2]}..${negCuts[3]} ${unitLabel}` },
+    { color: negColors[2], label: `${negCuts[1]}..${negCuts[2]} ${unitLabel}` },
+    { color: negColors[1], label: `${negCuts[0]}..${negCuts[1]} ${unitLabel}` },
+    { color: negColors[0], label: `< ${negCuts[0]} ${unitLabel}` },
+  ];
+}
+
 // Thin the stations by a pixel grid to reduce the number of points on the map
 function thinByPixelGrid(
   stations: SurfaceObs[],
@@ -352,6 +522,36 @@ function formatZulu(iso: string | null): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toISOString().slice(11, 16) + "Z";
+}
+
+function formatValidTimeLabel(iso: string | null, zone: DisplayTimeZone): string {
+  if (!iso) return "---- UTC --- -- --- ----";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "---- UTC --- -- --- ----";
+
+  if (zone === "UTC") {
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    const dow = d.toLocaleString("en-US", { weekday: "short", timeZone: "UTC" });
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const mon = d.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+    const year = String(d.getUTCFullYear());
+    return `${hh}${mm} UTC ${dow} ${day} ${mon} ${year}`;
+  }
+
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const dow = d.toLocaleString("en-US", { weekday: "short" });
+  const day = String(d.getDate()).padStart(2, "0");
+  const mon = d.toLocaleString("en-US", { month: "short" });
+  const year = String(d.getFullYear());
+
+  const tzPart = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+    .formatToParts(d)
+    .find((p) => p.type === "timeZoneName")?.value;
+  const tz = tzPart && tzPart.trim() ? tzPart.trim() : "LOCAL";
+
+  return `${hh}${mm} ${tz} ${dow} ${day} ${mon} ${year}`;
 }
 
 // Format the sky conditions as "CLR///" or "SCT015"
@@ -535,8 +735,7 @@ function App() {
     padding: { top: 0, left: 0, bottom: 0, right: 0 },
   });
   type TimelineMode = "live" | "history";
-
-  const [timelineMode, setTimelineMode] = useState<TimelineMode>("live");
+  const timelineMode: TimelineMode = "history";
   const [availableTimes, setAvailableTimes] = useState<string[]>([]);
   const [timeIndex, setTimeIndex] = useState<number>(-1);
 
@@ -801,9 +1000,30 @@ const densityPx = useMemo(() => {
     }
   }, []);
 
+  const fetchObsSnapshot = useCallback(async (iso: string): Promise<SurfaceObs[]> => {
+    const cached = obsCacheRef.current.get(iso);
+    if (cached) return cached;
+    try {
+      const res = await fetch(`/api/obs/at?time=${encodeURIComponent(iso)}`);
+      const data = await res.json();
+      const stations: SurfaceObs[] = data.stations ?? [];
+      obsCacheRef.current.set(iso, stations);
+      return stations;
+    } catch (e) {
+      console.error("Failed to fetch snapshot for delta:", e);
+      return [];
+    }
+  }, []);
+
   const [showStations, setShowStations] = useState<boolean>(() => {
     const saved = localStorage.getItem("showStations");
     return saved === null ? true : saved === "true";
+  });
+  const [changeBaselineObs, setChangeBaselineObs] = useState<SurfaceObs[]>([]);
+  const [changeBaselineIso, setChangeBaselineIso] = useState<string | null>(null);
+
+  const [selectedViewId, setSelectedViewId] = useState<string>(() => {
+    return localStorage.getItem("selectedViewId") ?? "";
   });
 
   const [includeLegendInExport, setIncludeLegendInExport] = useState<boolean>(() => {
@@ -816,19 +1036,37 @@ const densityPx = useMemo(() => {
     return saved === null ? false : saved === "true";
   });
 
-  useEffect(() => {
-    // LIVE MODE: keep your current polling behavior
-    if (timelineMode === "live") {
-      fetchObservations();
-      const interval = setInterval(fetchObservations, 300000);
-      return () => clearInterval(interval);
+  const [displayTimeZone, setDisplayTimeZone] = useState<DisplayTimeZone>(() => {
+    const saved = localStorage.getItem("displayTimeZone");
+    return saved === "LOCAL" || saved === "UTC" ? (saved as DisplayTimeZone) : "UTC";
+  });
+
+  const applyPresetView = useCallback((view: PresetView) => {
+    setSelectedViewId(view.id);
+    const map = mapRef.current?.getMap();
+    if (!map) {
+      setViewState((prev) => ({
+        ...prev,
+        longitude: view.lon,
+        latitude: view.lat,
+        zoom: view.zoom,
+      }));
+      return;
     }
-  
-    // HISTORY MODE: load list of times once (and occasionally refresh list)
+    map.easeTo({
+      center: [view.lon, view.lat],
+      zoom: view.zoom,
+      duration: 650,
+      essential: true,
+    });
+  }, []);
+
+  useEffect(() => {
+    // Always drive the UI from history snapshots / slider frames.
     fetchAvailableTimes(HISTORY_WINDOW_MINUTES);
     const interval = setInterval(() => fetchAvailableTimes(HISTORY_WINDOW_MINUTES), 300000);
     return () => clearInterval(interval);
-  }, [timelineMode, fetchAvailableTimes]);
+  }, [fetchAvailableTimes]);
 
   useEffect(() => {
     if (timelineMode !== "history") return;
@@ -1287,6 +1525,26 @@ const densityPx = useMemo(() => {
     []
   );
 
+  const deltaSlpLegend = useMemo(
+    () => makeDivergingLegend(DELTA_SLP_NEG_CUTS, DELTA_SLP_POS_CUTS, DELTA_SLP_NEG_COLORS, DELTA_SLP_POS_COLORS, "mb"),
+    []
+  );
+
+  const deltaTempLegend = useMemo(() => {
+    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
+    return makeDivergingLegend(cuts.neg, cuts.pos, DELTA_TEMP_NEG_COLORS, DELTA_TEMP_POS_COLORS, `°${tempUnit}`);
+  }, [tempUnit]);
+
+  const deltaDewpointLegend = useMemo(() => {
+    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
+    return makeDivergingLegend(cuts.neg, cuts.pos, DELTA_DEWPOINT_NEG_COLORS, DELTA_DEWPOINT_POS_COLORS, `°${tempUnit}`);
+  }, [tempUnit]);
+
+  const deltaThetaELegend = useMemo(
+    () => makeDivergingLegend(DELTA_THETAE_NEG_CUTS, DELTA_THETAE_POS_CUTS, DELTA_THETAE_NEG_COLORS, DELTA_THETAE_POS_COLORS, "K"),
+    []
+  );
+
   type AnalysisOverlay =
     | "temp"
     | "dewpoint"
@@ -1297,9 +1555,16 @@ const densityPx = useMemo(() => {
     | "visibilityFill"
     | "relativeHumidityFill";
   type AnalysisOverlaySet = Record<AnalysisOverlay, boolean>;
-  type DerivedOverlay = "mixingRatio" | "moistureConvergence" | "thetaE";
+  type DerivedOverlay =
+    | "mixingRatio"
+    | "moistureConvergence"
+    | "thetaE"
+    | "deltaSlp24h"
+    | "deltaTemp24h"
+    | "deltaDewpoint24h"
+    | "deltaThetaE24h";
   type DerivedOverlaySet = Record<DerivedOverlay, boolean>;
-  type GeographyOverlay = "adm0" | "adm1" | "adm2";
+  type GeographyOverlay = "adm0" | "adm1" | "adm2" | "artcc";
   type GeographyOverlaySet = Record<GeographyOverlay, boolean>;
   
   const [analysisOverlays, setAnalysisOverlays] = useState<AnalysisOverlaySet>(() => {
@@ -1345,19 +1610,44 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("derivedOverlays");
     if (saved) {
       try {
-        const obj = JSON.parse(saved) as Partial<DerivedOverlaySet>;
+        const obj = JSON.parse(saved) as Partial<DerivedOverlaySet> & {
+          deltaSlp3h?: boolean;
+          deltaTemp3h?: boolean;
+          deltaDewpoint3h?: boolean;
+          deltaThetaE3h?: boolean;
+        };
         return {
           mixingRatio: !!obj.mixingRatio,
           moistureConvergence: !!obj.moistureConvergence,
           thetaE: !!obj.thetaE,
+          // Backward-compatible migration from older `*3h` keys.
+          deltaSlp24h: !!(obj.deltaSlp24h ?? obj.deltaSlp3h),
+          deltaTemp24h: !!(obj.deltaTemp24h ?? obj.deltaTemp3h),
+          deltaDewpoint24h: !!(obj.deltaDewpoint24h ?? obj.deltaDewpoint3h),
+          deltaThetaE24h: !!(obj.deltaThetaE24h ?? obj.deltaThetaE3h),
         };
       } catch {}
     }
-    return { mixingRatio: false, moistureConvergence: false, thetaE: false };
+    return {
+      mixingRatio: false,
+      moistureConvergence: false,
+      thetaE: false,
+      deltaSlp24h: false,
+      deltaTemp24h: false,
+      deltaDewpoint24h: false,
+      deltaThetaE24h: false,
+    };
   });
 
   const anyAnalysisLikeOverlayOn =
-    anyOverlayOn || derivedOverlays.mixingRatio || derivedOverlays.moistureConvergence || derivedOverlays.thetaE;
+    anyOverlayOn
+    || derivedOverlays.mixingRatio
+    || derivedOverlays.moistureConvergence
+    || derivedOverlays.thetaE
+    || derivedOverlays.deltaSlp24h
+    || derivedOverlays.deltaTemp24h
+    || derivedOverlays.deltaDewpoint24h
+    || derivedOverlays.deltaThetaE24h;
 
   type LegendItem = { color: string; label: string };
   type LegendCard = { title: string; items: LegendItem[] };
@@ -1375,6 +1665,18 @@ const densityPx = useMemo(() => {
     if (analysisOverlays.relativeHumidityFill) {
       cards.push({ title: "RH Critical (%)", items: relativeHumidityLegend });
     }
+    if (derivedOverlays.deltaSlp24h) {
+      cards.push({ title: "24h SLP Change (mb)", items: deltaSlpLegend });
+    }
+    if (derivedOverlays.deltaTemp24h) {
+      cards.push({ title: `24h Temp Change (°${tempUnit})`, items: deltaTempLegend });
+    }
+    if (derivedOverlays.deltaDewpoint24h) {
+      cards.push({ title: `24h Dewpoint Change (°${tempUnit})`, items: deltaDewpointLegend });
+    }
+    if (derivedOverlays.deltaThetaE24h) {
+      cards.push({ title: "24h Theta-e Change (K)", items: deltaThetaELegend });
+    }
     return cards;
   }, [
     analysisOverlays.windSpeedFill,
@@ -1386,6 +1688,15 @@ const densityPx = useMemo(() => {
     ceilingFillLegend,
     visibilityFillLegend,
     relativeHumidityLegend,
+    derivedOverlays.deltaSlp24h,
+    derivedOverlays.deltaTemp24h,
+    derivedOverlays.deltaDewpoint24h,
+    derivedOverlays.deltaThetaE24h,
+    deltaSlpLegend,
+    deltaTempLegend,
+    deltaDewpointLegend,
+    deltaThetaELegend,
+    tempUnit,
   ]);
 
   type ContourLegendItem = {
@@ -1401,7 +1712,14 @@ const densityPx = useMemo(() => {
       items.push({ key: "temp", label: `Temperature (°${tempUnit})`, color: "#dc2626", width: 2 });
     }
     if (analysisOverlays.dewpoint) {
-      items.push({ key: "dewpoint", label: `Dewpoint (°${tempUnit})`, color: "#14532d", width: 2, dash: [5, 6] });
+      const dpThreshold = tempUnit === "F" ? 45 : 8;
+      items.push({
+        key: "dewpoint",
+        label: `Dewpoint (°${tempUnit}, ≥${dpThreshold})`,
+        color: "#14532d",
+        width: 2,
+        dash: [5, 6],
+      });
     }
     if (analysisOverlays.slp) items.push({ key: "slp", label: "Sea-Level Pressure (mb)", color: "#111827", width: 3 });
     if (derivedOverlays.mixingRatio) {
@@ -1502,6 +1820,42 @@ const densityPx = useMemo(() => {
         value: v == null ? "—" : `${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
       });
     }
+    if (derivedOverlays.deltaSlp24h) {
+      const v = sampleScalarGrid(g.deltaSlp24h, x, y);
+      const hidden = v != null && Math.abs(v) <= 4;
+      rows.push({
+        label: "24h SLP Change (mb)",
+        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
+    if (derivedOverlays.deltaTemp24h) {
+      const v = sampleScalarGrid(g.deltaTemp24h, x, y);
+      const warmCut = tempUnit === "F" ? 4 : 2;
+      const coolCut = tempUnit === "F" ? -4 : -2;
+      const hidden = v != null && !(v > warmCut || v < coolCut);
+      rows.push({
+        label: `24h Temp Change (°${tempUnit})`,
+        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
+    if (derivedOverlays.deltaDewpoint24h) {
+      const v = sampleScalarGrid(g.deltaDewpoint24h, x, y);
+      const warmCut = tempUnit === "F" ? 4 : 2;
+      const coolCut = tempUnit === "F" ? -4 : -2;
+      const hidden = v != null && !(v > warmCut || v < coolCut);
+      rows.push({
+        label: `24h Dewpoint Change (°${tempUnit})`,
+        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
+    if (derivedOverlays.deltaThetaE24h) {
+      const v = sampleScalarGrid(g.deltaThetaE24h, x, y);
+      const hidden = v != null && !(v > 2 || v < -2);
+      rows.push({
+        label: "24h Theta-e Change (K)",
+        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
     if (derivedOverlays.moistureConvergence) {
       const v = sampleScalarGrid(g.moistureConvergence, x, y);
       const hidden = v != null && v < 1;
@@ -1521,6 +1875,54 @@ const densityPx = useMemo(() => {
     windUnit,
   ]);
 
+  const activeFrameIso = useMemo(() => {
+    if (timelineMode === "history") {
+      const t = availableTimes[timeIndex];
+      if (t) return t;
+    }
+    return lastUpdate;
+  }, [timelineMode, availableTimes, timeIndex, lastUpdate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeFrameIso) {
+      setChangeBaselineObs([]);
+      setChangeBaselineIso(null);
+      return;
+    }
+
+    const targetMs = new Date(activeFrameIso).getTime() - CHANGE_WINDOW_HOURS * 60 * 60 * 1000;
+    if (!Number.isFinite(targetMs)) {
+      setChangeBaselineObs([]);
+      setChangeBaselineIso(null);
+      return;
+    }
+
+    const targetIso = new Date(targetMs).toISOString();
+
+    (async () => {
+      const baseline = await fetchObsSnapshot(targetIso);
+      if (cancelled) return;
+      setChangeBaselineObs(baseline);
+      setChangeBaselineIso(targetIso);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFrameIso, fetchObsSnapshot]);
+
+  const changeBaselineById = useMemo(() => {
+    const m = new Map<string, SurfaceObs>();
+    for (const s of changeBaselineObs) m.set(s.id, s);
+    return m;
+  }, [changeBaselineObs]);
+
+  const validTimeLabel = useMemo(
+    () => formatValidTimeLabel(activeFrameIso, displayTimeZone),
+    [activeFrameIso, displayTimeZone]
+  );
+
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
 
   const [geographyOverlays, setGeographyOverlays] = useState<GeographyOverlaySet>(() => {
@@ -1532,10 +1934,11 @@ const densityPx = useMemo(() => {
           adm0: !!obj.adm0,
           adm1: !!obj.adm1,
           adm2: !!obj.adm2,
+          artcc: !!obj.artcc,
         };
       } catch {}
     }
-    return { adm0: true, adm1: true, adm2: false };
+    return { adm0: true, adm1: true, adm2: false, artcc: false };
   });
 
   const adm0BoundaryLayer: any = useMemo(
@@ -1611,6 +2014,28 @@ const densityPx = useMemo(() => {
           8, 0.38,
           10, 0.55,
         ],
+      },
+    }),
+    []
+  );
+
+  const artccBoundaryLayer: any = useMemo(
+    () => ({
+      id: "artcc-boundaries-layer",
+      type: "line",
+      source: "artcc-boundaries",
+      paint: {
+        "line-color": "rgba(0, 0, 0, 0.9)",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          2, 1.4,
+          5, 2.1,
+          8, 2.8,
+          10, 3.4,
+        ],
+        "line-opacity": 0.92,
       },
     }),
     []
@@ -2107,6 +2532,56 @@ const drawAnalysisOverlay = useCallback(() => {
     return null;
   }
 
+  function scalarFillColorForDeltaSlp24h(v: number): string | null {
+    if (!(v > 4 || v < -4)) return null;
+    return divergingColorForDelta(
+      v,
+      DELTA_SLP_NEG_CUTS,
+      DELTA_SLP_POS_CUTS,
+      DELTA_SLP_NEG_COLORS,
+      DELTA_SLP_POS_COLORS
+    );
+  }
+
+  function scalarFillColorForDeltaTemp24h(v: number): string | null {
+    const warmCut = tempUnit === "F" ? 4 : 2;
+    const coolCut = tempUnit === "F" ? -4 : -2;
+    if (!(v > warmCut || v < coolCut)) return null;
+    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
+    return divergingColorForDelta(
+      v,
+      cuts.neg,
+      cuts.pos,
+      DELTA_TEMP_NEG_COLORS,
+      DELTA_TEMP_POS_COLORS
+    );
+  }
+
+  function scalarFillColorForDeltaDewpoint24h(v: number): string | null {
+    const warmCut = tempUnit === "F" ? 4 : 2;
+    const coolCut = tempUnit === "F" ? -4 : -2;
+    if (!(v > warmCut || v < coolCut)) return null;
+    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
+    return divergingColorForDelta(
+      v,
+      cuts.neg,
+      cuts.pos,
+      DELTA_DEWPOINT_NEG_COLORS,
+      DELTA_DEWPOINT_POS_COLORS
+    );
+  }
+
+  function scalarFillColorForDeltaThetaE24h(v: number): string | null {
+    if (!(v > 2 || v < -2)) return null;
+    return divergingColorForDelta(
+      v,
+      DELTA_THETAE_NEG_CUTS,
+      DELTA_THETAE_POS_CUTS,
+      DELTA_THETAE_NEG_COLORS,
+      DELTA_THETAE_POS_COLORS
+    );
+  }
+
   function drawScalarFill(
     pts: Array<{ x: number; y: number; val: number }>,
     colorFn: (value: number) => string | null,
@@ -2245,6 +2720,74 @@ const drawAnalysisOverlay = useCallback(() => {
     }
     const grid = drawScalarFill(pts, scalarFillColorForRelativeHumidity, 0.44, 110, 4);
     if (grid) computedGrids.relativeHumidity = grid;
+  }
+
+  function collectDeltaStationPoints(
+    compute: (current: SurfaceObs, baseline: SurfaceObs) => number | null
+  ): Array<{ x: number; y: number; val: number }> {
+    const pts: Array<{ x: number; y: number; val: number }> = [];
+    for (const current of declutteredObs) {
+      const baseline = changeBaselineById.get(current.id);
+      if (!baseline) continue;
+      const val = compute(current, baseline);
+      if (!Number.isFinite(val)) continue;
+      const p = map.project([current.lon, current.lat]);
+      pts.push({ x: p.x, y: p.y, val });
+    }
+    return pts;
+  }
+
+  function drawDeltaSlp24hFill() {
+    const pts = collectDeltaStationPoints((current, baseline) => {
+      if (isExcludedFromAnalysis(current, "slp") || isExcludedFromAnalysis(baseline, "slp")) return null;
+      if (current.pressureMb == null || baseline.pressureMb == null) return null;
+      return current.pressureMb - baseline.pressureMb;
+    });
+    const grid = drawScalarFill(pts, scalarFillColorForDeltaSlp24h, 0.48, 130, 4);
+    if (grid) computedGrids.deltaSlp24h = grid;
+  }
+
+  function drawDeltaTemp24hFill() {
+    const pts = collectDeltaStationPoints((current, baseline) => {
+      if (isExcludedFromAnalysis(current, "temp") || isExcludedFromAnalysis(baseline, "temp")) return null;
+      if (current.tempC == null || baseline.tempC == null) return null;
+      const deltaC = current.tempC - baseline.tempC;
+      return tempUnit === "F" ? deltaC * (9 / 5) : deltaC;
+    });
+    const grid = drawScalarFill(pts, scalarFillColorForDeltaTemp24h, 0.48, 130, 4);
+    if (grid) computedGrids.deltaTemp24h = grid;
+  }
+
+  function drawDeltaDewpoint24hFill() {
+    const pts = collectDeltaStationPoints((current, baseline) => {
+      if (isExcludedFromAnalysis(current, "dewpoint") || isExcludedFromAnalysis(baseline, "dewpoint")) return null;
+      if (current.dewpointC == null || baseline.dewpointC == null) return null;
+      const deltaC = current.dewpointC - baseline.dewpointC;
+      return tempUnit === "F" ? deltaC * (9 / 5) : deltaC;
+    });
+    const grid = drawScalarFill(pts, scalarFillColorForDeltaDewpoint24h, 0.48, 130, 4);
+    if (grid) computedGrids.deltaDewpoint24h = grid;
+  }
+
+  function drawDeltaThetaE24hFill() {
+    const pts = collectDeltaStationPoints((current, baseline) => {
+      if (
+        isExcludedFromAnalysis(current, "temp")
+        || isExcludedFromAnalysis(current, "dewpoint")
+        || isExcludedFromAnalysis(current, "slp")
+        || isExcludedFromAnalysis(baseline, "temp")
+        || isExcludedFromAnalysis(baseline, "dewpoint")
+        || isExcludedFromAnalysis(baseline, "slp")
+      ) return null;
+      if (current.tempC == null || current.dewpointC == null || current.pressureMb == null) return null;
+      if (baseline.tempC == null || baseline.dewpointC == null || baseline.pressureMb == null) return null;
+      const currentThetaE = equivalentPotentialTemperatureK(current.tempC, current.dewpointC, current.pressureMb);
+      const baselineThetaE = equivalentPotentialTemperatureK(baseline.tempC, baseline.dewpointC, baseline.pressureMb);
+      if (currentThetaE == null || baselineThetaE == null) return null;
+      return currentThetaE - baselineThetaE;
+    });
+    const grid = drawScalarFill(pts, scalarFillColorForDeltaThetaE24h, 0.48, 130, 4);
+    if (grid) computedGrids.deltaThetaE24h = grid;
   }
 
   function drawMoistureConvergenceContours() {
@@ -2678,6 +3221,10 @@ const drawAnalysisOverlay = useCallback(() => {
     if (analysisOverlays.ceilingFill) drawCeilingFill();
     if (analysisOverlays.visibilityFill) drawVisibilityFill();
     if (analysisOverlays.relativeHumidityFill) drawRelativeHumidityFill();
+    if (derivedOverlays.deltaSlp24h) drawDeltaSlp24hFill();
+    if (derivedOverlays.deltaTemp24h) drawDeltaTemp24hFill();
+    if (derivedOverlays.deltaDewpoint24h) drawDeltaDewpoint24hFill();
+    if (derivedOverlays.deltaThetaE24h) drawDeltaThetaE24hFill();
     if (derivedOverlays.moistureConvergence) drawMoistureConvergenceContours();
     // draw order: pressure under, dewpoint, then temp on top
     if (analysisOverlays.slp) drawOne("slp");
@@ -2689,7 +3236,7 @@ const drawAnalysisOverlay = useCallback(() => {
   
     analysisGridRef.current = computedGrids;
     ctx.globalAlpha = 1;
-  }, [analysisOverlays, derivedOverlays, declutteredObs, tempUnit, anyAnalysisLikeOverlayOn, windRenderMode, windUnit]);
+  }, [analysisOverlays, derivedOverlays, declutteredObs, tempUnit, anyAnalysisLikeOverlayOn, windRenderMode, windUnit, changeBaselineById]);
 
 function windToUV(dirDeg: number, spdKt: number) {
   // METAR direction is "from" direction.
@@ -2741,7 +3288,48 @@ const exportPng = useCallback(() => {
     ctx.drawImage(c, 0, 0);
   }
 
-  // 3) optional legend cards
+  // 3) valid-time label (always included in export)
+  {
+    const dpr = window.devicePixelRatio || 1;
+    const scale = dpr;
+    const padX = 10 * scale;
+    const padY = 5 * scale;
+    const fontSize = 12 * scale;
+    const radius = 8 * scale;
+    const bottomMargin = 10 * scale;
+
+    const drawRoundRect = (x: number, y: number, w: number, h: number, r: number) => {
+      const rr = Math.min(r, w * 0.5, h * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    };
+
+    ctx.font = `600 ${fontSize}px sans-serif`;
+    const text = validTimeLabel;
+    const textWidth = Math.ceil(ctx.measureText(text).width);
+    const boxW = textWidth + padX * 2;
+    const boxH = Math.ceil(fontSize * 1.25) + padY * 2;
+    const x = Math.round((width - boxW) / 2);
+    const y = Math.round(height - bottomMargin - boxH);
+
+    drawRoundRect(x, y, boxW, boxH, radius);
+    ctx.fillStyle = "rgba(2, 6, 23, 0.82)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.45)";
+    ctx.lineWidth = 1 * scale;
+    ctx.stroke();
+
+    ctx.fillStyle = "#e5e7eb";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(text, x + padX, y + boxH - padY - 2 * scale);
+  }
+
+  // 4) optional legend cards
   if (includeLegendInExport) {
     const dpr = window.devicePixelRatio || 1;
     const scale = dpr;
@@ -2871,11 +3459,15 @@ const exportPng = useCallback(() => {
   a.href = dataUrl;
   a.download = `wx-mesoanalysis_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   a.click();
-}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems]);
+}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems, validTimeLabel]);
 
 useEffect(() => {
   localStorage.setItem("showStations", String(showStations));
 }, [showStations]);
+
+useEffect(() => {
+  localStorage.setItem("selectedViewId", selectedViewId);
+}, [selectedViewId]);
 
 useEffect(() => {
   if (!mapLoaded) return;
@@ -2902,6 +3494,10 @@ useEffect(() => {
 useEffect(() => {
   localStorage.setItem("cursorReadoutDiagnostics", String(showCursorDiagnostics));
 }, [showCursorDiagnostics]);
+
+useEffect(() => {
+  localStorage.setItem("displayTimeZone", displayTimeZone);
+}, [displayTimeZone]);
 
 useEffect(() => {
   if (!showCursorDiagnostics) setCursorProbe(null);
@@ -3052,6 +3648,7 @@ useEffect(() => {
               <details className="analysis-dropdown">
                 <summary>Derived Fields</summary>
                 <div className="analysis-menu">
+                  <div className="analysis-subsection-title">Moisture</div>
                   <label>
                     <input
                       type="checkbox"
@@ -3082,13 +3679,54 @@ useEffect(() => {
                     />
                     Moisture Convergence (Contours)
                   </label>
+                  <div className="analysis-subsection-title">24-hour change</div>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={derivedOverlays.deltaSlp24h}
+                      onChange={(e) =>
+                        setDerivedOverlays((s) => ({ ...s, deltaSlp24h: e.target.checked }))
+                      }
+                    />
+                    SLP Change (24h)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={derivedOverlays.deltaTemp24h}
+                      onChange={(e) =>
+                        setDerivedOverlays((s) => ({ ...s, deltaTemp24h: e.target.checked }))
+                      }
+                    />
+                    Temperature Change (24h)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={derivedOverlays.deltaDewpoint24h}
+                      onChange={(e) =>
+                        setDerivedOverlays((s) => ({ ...s, deltaDewpoint24h: e.target.checked }))
+                      }
+                    />
+                    Dewpoint Change (24h)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={derivedOverlays.deltaThetaE24h}
+                      onChange={(e) =>
+                        setDerivedOverlays((s) => ({ ...s, deltaThetaE24h: e.target.checked }))
+                      }
+                    />
+                    Theta-e Change (24h)
+                  </label>
                 </div>
               </details>
             </div>
             <div className="geography-control">
               <div className="geography-title">Geographies</div>
               <details className="geography-dropdown">
-                <summary>Boundary Layers</summary>
+                <summary>Geographic Layers</summary>
                 <div className="geography-menu">
                   <label>
                     <input
@@ -3114,76 +3752,128 @@ useEffect(() => {
                     />
                     County/District Boundaries (US Counties)
                   </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={geographyOverlays.artcc}
+                      onChange={(e) => setGeographyOverlays((s) => ({ ...s, artcc: e.target.checked }))}
+                    />
+                    U.S. ARTCC Boundaries
+                  </label>
+                  <details className="view-submenu">
+                    <summary>Views</summary>
+                    <div className="view-submenu-content">
+                      <details className="view-submenu">
+                        <summary>U.S. Regions</summary>
+                        <div className="view-item-list">
+                          {REGION_VIEWS.map((view) => (
+                            <button
+                              key={view.id}
+                              type="button"
+                              className={`view-item-btn ${selectedViewId === view.id ? "active" : ""}`}
+                              onClick={() => applyPresetView(view)}
+                            >
+                              {view.label}
+                            </button>
+                          ))}
+                        </div>
+                      </details>
+                      <details className="view-submenu">
+                        <summary>U.S. States</summary>
+                        <div className="view-item-grid">
+                          {STATE_TERRITORY_VIEWS.map((view) => (
+                            <button
+                              key={view.id}
+                              type="button"
+                              className={`view-item-btn ${selectedViewId === view.id ? "active" : ""}`}
+                              onClick={() => applyPresetView(view)}
+                              title={view.id.replace("state-", "")}
+                            >
+                              {view.label}
+                            </button>
+                          ))}
+                        </div>
+                      </details>
+                      <details className="view-submenu">
+                        <summary>U.S. ARTCCs</summary>
+                        <div className="view-item-grid">
+                          {ARTCC_VIEWS.map((view) => (
+                            <button
+                              key={view.id}
+                              type="button"
+                              className={`view-item-btn ${selectedViewId === view.id ? "active" : ""}`}
+                              onClick={() => applyPresetView(view)}
+                            >
+                              {view.label}
+                            </button>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
+                  </details>
                 </div>
               </details>
             </div>
             <div className="time-control">
               <div className="time-title">TIME</div>
-              {timelineMode === "live" && (
-                <div className="time-mode-readout">Live mode (toggle in Options)</div>
-              )}
+              <div className="time-row">
+                <button
+                  type="button"
+                  className="control-btn"
+                  onClick={() => setTimeIndex((i) => Math.max(0, i - 1))}
+                  disabled={availableTimes.length === 0 || timeIndex <= 0}
+                >
+                  ◀
+                </button>
 
-              {timelineMode === "history" && (
-                <>
-                  <div className="time-row">
-                    <button
-                      type="button"
-                      className="control-btn"
-                      onClick={() => setTimeIndex((i) => Math.max(0, i - 1))}
-                      disabled={availableTimes.length === 0 || timeIndex <= 0}
-                    >
-                      ◀
-                    </button>
+                <button
+                  type="button"
+                  className={`control-btn ${isPlaying ? "active" : ""}`}
+                  onClick={() => setIsPlaying((p) => !p)}
+                  disabled={availableTimes.length < 2}
+                >
+                  {isPlaying ? "Pause" : "Play"}
+                </button>
 
-                    <button
-                      type="button"
-                      className={`control-btn ${isPlaying ? "active" : ""}`}
-                      onClick={() => setIsPlaying((p) => !p)}
-                      disabled={availableTimes.length < 2}
-                    >
-                      {isPlaying ? "Pause" : "Play"}
-                    </button>
+                <button
+                  type="button"
+                  className="control-btn"
+                  onClick={() => setTimeIndex((i) => Math.min(availableTimes.length - 1, i + 1))}
+                  disabled={availableTimes.length === 0 || timeIndex >= availableTimes.length - 1}
+                >
+                  ▶
+                </button>
 
-                    <button
-                      type="button"
-                      className="control-btn"
-                      onClick={() => setTimeIndex((i) => Math.min(availableTimes.length - 1, i + 1))}
-                      disabled={availableTimes.length === 0 || timeIndex >= availableTimes.length - 1}
-                    >
-                      ▶
-                    </button>
+                <select
+                  className="density-select"
+                  value={playSpeedMs}
+                  onChange={(e) => setPlaySpeedMs(Number(e.target.value))}
+                >
+                  <option value={250}>0.25s</option>
+                  <option value={500}>0.5s</option>
+                  <option value={800}>0.8s</option>
+                  <option value={1200}>1.2s</option>
+                </select>
+              </div>
 
-                    <select
-                      className="density-select"
-                      value={playSpeedMs}
-                      onChange={(e) => setPlaySpeedMs(Number(e.target.value))}
-                    >
-                      <option value={250}>0.25s</option>
-                      <option value={500}>0.5s</option>
-                      <option value={800}>0.8s</option>
-                      <option value={1200}>1.2s</option>
-                    </select>
-                  </div>
+              <input
+                className="time-slider"
+                type="range"
+                min={0}
+                max={Math.max(0, availableTimes.length - 1)}
+                step={1}
+                value={Math.max(0, timeIndex)}
+                onChange={(e) => {
+                  setIsPlaying(false);
+                  setTimeIndex(Number(e.target.value));
+                }}
+                disabled={availableTimes.length === 0}
+              />
 
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0, availableTimes.length - 1)}
-                    step={1}
-                    value={Math.max(0, timeIndex)}
-                    onChange={(e) => {
-                      setIsPlaying(false);
-                      setTimeIndex(Number(e.target.value));
-                    }}
-                    disabled={availableTimes.length === 0}
-                  />
-
-                  <div className="time-label">
-                    {availableTimes[timeIndex] ? formatZulu(availableTimes[timeIndex]) : "—"}{" "}
-                    {availableTimes[timeIndex] ? `(${formatAge(availableTimes[timeIndex])})` : ""}
-                  </div>
-                </>
-              )}
+              <div className="time-label">
+                {availableTimes[timeIndex] ? formatZulu(availableTimes[timeIndex]) : "—"}{" "}
+                {availableTimes[timeIndex] ? `(${formatAge(availableTimes[timeIndex])})` : ""}
+              </div>
             </div>
             <div className="header-actions">
               <button type="button" className="options-open-btn" onClick={() => setIsOptionsOpen(true)}>
@@ -3246,65 +3936,25 @@ useEffect(() => {
               />
             )}
 
-            {(analysisOverlays.windSpeedFill
-              || analysisOverlays.ceilingFill
-              || analysisOverlays.visibilityFill
-              || analysisOverlays.relativeHumidityFill) && (
+            {activeFillLegendCards.length > 0 && (
               <div className="analysis-legends">
-                {analysisOverlays.windSpeedFill && (
-                  <div className="analysis-legend">
-                    <div className="wind-fill-legend-title">Wind Speed ({windUnit})</div>
+                {activeFillLegendCards.map((card) => (
+                  <div className="analysis-legend" key={`fill-legend-${card.title}`}>
+                    <div className="wind-fill-legend-title">{card.title}</div>
                     <ul className="wind-fill-legend-list">
-                      {windFillLegend.map((item, idx) => (
-                        <li key={`wind-fill-${idx}`}>
+                      {card.items.map((item, idx) => (
+                        <li key={`${card.title}-${idx}`}>
                           <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
                           <span>{item.label}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
-                )}
-                {analysisOverlays.ceilingFill && (
-                  <div className="analysis-legend">
-                    <div className="wind-fill-legend-title">Ceiling (hundreds ft)</div>
-                    <ul className="wind-fill-legend-list">
-                      {ceilingFillLegend.map((item, idx) => (
-                        <li key={`ceiling-fill-${idx}`}>
-                          <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
-                          <span>{item.label}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {analysisOverlays.visibilityFill && (
-                  <div className="analysis-legend">
-                    <div className="wind-fill-legend-title">Visibility (SM)</div>
-                    <ul className="wind-fill-legend-list">
-                      {visibilityFillLegend.map((item, idx) => (
-                        <li key={`visibility-fill-${idx}`}>
-                          <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
-                          <span>{item.label}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {analysisOverlays.relativeHumidityFill && (
-                  <div className="analysis-legend">
-                    <div className="wind-fill-legend-title">RH Critical (%)</div>
-                    <ul className="wind-fill-legend-list">
-                      {relativeHumidityLegend.map((item, idx) => (
-                        <li key={`rh-fill-${idx}`}>
-                          <span className="wind-fill-swatch" style={{ backgroundColor: item.color }} />
-                          <span>{item.label}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                ))}
               </div>
             )}
+
+            <div className="valid-time-overlay">{validTimeLabel}</div>
 
             {contourLegendItems.length > 0 && (
               <div className="contour-legends">
@@ -3398,6 +4048,11 @@ useEffect(() => {
               {geographyOverlays.adm2 && (
                 <Source id="adm2-boundaries" type="geojson" data={ADM2_BOUNDARIES_URL}>
                   <Layer {...adm2BoundaryLayer} />
+                </Source>
+              )}
+              {geographyOverlays.artcc && (
+                <Source id="artcc-boundaries" type="geojson" data={ARTCC_BOUNDARIES_URL}>
+                  <Layer {...artccBoundaryLayer} />
                 </Source>
               )}
               <Source id="stations" type="geojson" data={stationsGeoJson}>
@@ -3728,25 +4383,22 @@ useEffect(() => {
 
               <div className="options-section">
                 <div className="options-section-title">Timeline</div>
-                <div className="time-row">
-                  <label className="time-mode">
-                    <input
-                      type="radio"
-                      name="timelineModeOptions"
-                      checked={timelineMode === "live"}
-                      onChange={() => { setTimelineMode("live"); setIsPlaying(false); }}
-                    />
-                    Live
-                  </label>
-                  <label className="time-mode">
-                    <input
-                      type="radio"
-                      name="timelineModeOptions"
-                      checked={timelineMode === "history"}
-                      onChange={() => setTimelineMode("history")}
-                    />
-                    History
-                  </label>
+                <label className="options-label">Display Time Zone</label>
+                <div className="wind-unit-row">
+                  <button
+                    type="button"
+                    className={`control-btn ${displayTimeZone === "UTC" ? "active" : ""}`}
+                    onClick={() => setDisplayTimeZone("UTC")}
+                  >
+                    UTC
+                  </button>
+                  <button
+                    type="button"
+                    className={`control-btn ${displayTimeZone === "LOCAL" ? "active" : ""}`}
+                    onClick={() => setDisplayTimeZone("LOCAL")}
+                  >
+                    Local
+                  </button>
                 </div>
               </div>
 

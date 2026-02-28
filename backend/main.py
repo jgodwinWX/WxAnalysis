@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 import threading
 from fastapi import Query, HTTPException
+import requests
 
 from metar_fetcher import fetch_current_metars
 
@@ -70,10 +71,57 @@ class Snapshot:
 # Rolling history
 _snapshot_history: List[Snapshot] = []
 _snapshot_lock = threading.Lock()
+_artcc_geojson_cache: Optional[dict] = None
+_artcc_cache_time: Optional[datetime] = None
 
 # Tune these:
 SNAPSHOT_MAX_ITEMS = 2000       # max snapshots to keep
 SNAPSHOT_RETENTION_MIN = 6 * 60 # 6 hours (minutes) for pruning; can be larger than API default
+ARTCC_CACHE_MINUTES = 12 * 60
+ARTCC_SOURCE_URLS = [
+    "https://services5.arcgis.com/HDRa0B57OVrv2E1q/ArcGIS/rest/services/Airspace_Boundaries/FeatureServer/0/query?where=CLASS%20%3D%20%27ARTCC%27&outFields=IDENT,NAME,CLASS,LOCAL_TYPE&returnGeometry=true&f=geojson",
+    "https://services5.arcgis.com/HDRa0B57OVrv2E1q/ArcGIS/rest/services/Airspace_Boundaries/FeatureServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson",
+]
+
+
+def _feature_looks_like_artcc(feature: dict) -> bool:
+    props = feature.get("properties") or {}
+    text = " ".join(str(v).upper() for v in props.values() if v is not None)
+    return (
+        "ARTCC" in text
+        or "AIR ROUTE TRAFFIC CONTROL CENTER" in text
+        or "ANCHORAGE" in text
+        or "ZAN" in text
+    )
+
+
+def _normalize_artcc_geojson(data: dict) -> dict:
+    features = data.get("features")
+    if not isinstance(features, list):
+        return {"type": "FeatureCollection", "features": []}
+
+    filtered = [f for f in features if isinstance(f, dict) and _feature_looks_like_artcc(f)]
+    out_features = filtered if filtered else [f for f in features if isinstance(f, dict)]
+    return {"type": "FeatureCollection", "features": out_features}
+
+
+def _fetch_artcc_geojson() -> dict:
+    headers = {"User-Agent": "WxAnalysis/1.0"}
+    errors: List[str] = []
+
+    for url in ARTCC_SOURCE_URLS:
+        try:
+            resp = requests.get(url, timeout=25, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            geojson = _normalize_artcc_geojson(data)
+            if geojson.get("features"):
+                return geojson
+            errors.append(f"no features from {url}")
+        except Exception as e:
+            errors.append(f"{url}: {e}")
+
+    raise HTTPException(status_code=503, detail=f"Could not fetch ARTCC boundaries ({'; '.join(errors)})")
 
 def _parse_iso_z(s: str) -> datetime:
     # expects ISO with Z; accepts offsets too
@@ -265,3 +313,18 @@ async def refresh_obs() -> dict:
         "last_update": _last_update.isoformat() if _last_update else None,
     }
 
+
+@app.get("/api/geography/artcc")
+def artcc_boundaries() -> dict:
+    global _artcc_geojson_cache, _artcc_cache_time
+
+    now = datetime.now(timezone.utc)
+    if _artcc_geojson_cache is not None and _artcc_cache_time is not None:
+        age_min = (now - _artcc_cache_time).total_seconds() / 60.0
+        if age_min < ARTCC_CACHE_MINUTES:
+            return _artcc_geojson_cache
+
+    geojson = _fetch_artcc_geojson()
+    _artcc_geojson_cache = geojson
+    _artcc_cache_time = now
+    return geojson
