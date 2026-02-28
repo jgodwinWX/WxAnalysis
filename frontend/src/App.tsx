@@ -70,6 +70,7 @@ const RH_DRY_LEVELS = [0, 10, 20, 25];
 const RH_DRY_COLORS = ["#dc2626", "#fb923c", "#facc15"];
 const RH_MOIST_LEVELS = [90, 95, 100];
 const RH_MOIST_COLORS = ["#86efac", "#166534"];
+const MOISTURE_CONV_LEVELS_X1E7 = [0, 1, 2, 4, 6, 8, 10, 14, 20, Number.POSITIVE_INFINITY];
 
 const ADM0_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson";
@@ -93,6 +94,200 @@ function getWindFillThresholds(unit: WindUnit): number[] {
   if (unit === "MPH") return [0, 6, 12, 17, 23, 35, 46, 70, Number.POSITIVE_INFINITY];
   if (unit === "KPH") return [0, 9, 19, 28, 37, 56, 74, 111, Number.POSITIVE_INFINITY];
   return [0, 5, 10, 15, 20, 30, 40, 60, Number.POSITIVE_INFINITY];
+}
+
+function mixingRatioGkgFromDewpointPressure(dewpointC: number, pressureMb: number): number | null {
+  // Magnus form for vapor pressure over water (hPa/mb).
+  const e = 6.112 * Math.exp((17.67 * dewpointC) / (dewpointC + 243.5));
+  if (!Number.isFinite(e) || pressureMb <= e) return null;
+  // w (g/kg) = 621.97 * e / (p - e)
+  const w = (621.97 * e) / (pressureMb - e);
+  return Number.isFinite(w) ? w : null;
+}
+
+function equivalentPotentialTemperatureK(
+  tempC: number,
+  dewpointC: number,
+  pressureMb: number
+): number | null {
+  const tK = tempC + 273.15;
+  const tdK = dewpointC + 273.15;
+  if (!Number.isFinite(tK) || !Number.isFinite(tdK) || !Number.isFinite(pressureMb) || pressureMb <= 0) {
+    return null;
+  }
+
+  const wGkg = mixingRatioGkgFromDewpointPressure(dewpointC, pressureMb);
+  if (wGkg == null) return null;
+  const r = wGkg / 1000; // kg/kg
+  if (!Number.isFinite(r) || r <= 0) return null;
+
+  const tlcl = 1 / (1 / (tdK - 56) + Math.log(tK / tdK) / 800) + 56;
+  if (!Number.isFinite(tlcl) || tlcl <= 0) return null;
+
+  // Bolton (1980)-style theta-e approximation.
+  const thetaE =
+    tK
+    * Math.pow(1000 / pressureMb, 0.2854 * (1 - 0.28 * r))
+    * Math.exp(((3376 / tlcl) - 2.54) * r * (1 + 0.81 * r));
+
+  return Number.isFinite(thetaE) ? thetaE : null;
+}
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2)
+    + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+type ScalarGrid = {
+  values: Float32Array;
+  nx: number;
+  ny: number;
+  step: number;
+};
+
+type VectorGrid = {
+  u: Float32Array;
+  v: Float32Array;
+  nx: number;
+  ny: number;
+  step: number;
+};
+
+type AnalysisGridStore = {
+  temp?: ScalarGrid;
+  dewpoint?: ScalarGrid;
+  slp?: ScalarGrid;
+  windSpeed?: ScalarGrid;
+  ceiling?: ScalarGrid;
+  visibility?: ScalarGrid;
+  relativeHumidity?: ScalarGrid;
+  mixingRatio?: ScalarGrid;
+  thetaE?: ScalarGrid;
+  moistureConvergence?: ScalarGrid;
+  windVector?: VectorGrid;
+};
+
+function sampleScalarGrid(grid: ScalarGrid | undefined, xPx: number, yPx: number): number | null {
+  if (!grid) return null;
+  const gx = xPx / grid.step;
+  const gy = yPx / grid.step;
+  const i0 = Math.floor(gx);
+  const j0 = Math.floor(gy);
+  const i1 = i0 + 1;
+  const j1 = j0 + 1;
+  if (i0 < 0 || j0 < 0 || i1 >= grid.nx || j1 >= grid.ny) return null;
+
+  const idx00 = j0 * grid.nx + i0;
+  const idx10 = j0 * grid.nx + i1;
+  const idx01 = j1 * grid.nx + i0;
+  const idx11 = j1 * grid.nx + i1;
+  const v00 = grid.values[idx00];
+  const v10 = grid.values[idx10];
+  const v01 = grid.values[idx01];
+  const v11 = grid.values[idx11];
+  if (!Number.isFinite(v00) || !Number.isFinite(v10) || !Number.isFinite(v01) || !Number.isFinite(v11)) {
+    return null;
+  }
+
+  const tx = gx - i0;
+  const ty = gy - j0;
+  const a = v00 * (1 - tx) + v10 * tx;
+  const b = v01 * (1 - tx) + v11 * tx;
+  return a * (1 - ty) + b * ty;
+}
+
+function sampleVectorGrid(grid: VectorGrid | undefined, xPx: number, yPx: number): { u: number; v: number } | null {
+  if (!grid) return null;
+  const gx = xPx / grid.step;
+  const gy = yPx / grid.step;
+  const i0 = Math.floor(gx);
+  const j0 = Math.floor(gy);
+  const i1 = i0 + 1;
+  const j1 = j0 + 1;
+  if (i0 < 0 || j0 < 0 || i1 >= grid.nx || j1 >= grid.ny) return null;
+
+  const idx00 = j0 * grid.nx + i0;
+  const idx10 = j0 * grid.nx + i1;
+  const idx01 = j1 * grid.nx + i0;
+  const idx11 = j1 * grid.nx + i1;
+
+  const u00 = grid.u[idx00], u10 = grid.u[idx10], u01 = grid.u[idx01], u11 = grid.u[idx11];
+  const v00 = grid.v[idx00], v10 = grid.v[idx10], v01 = grid.v[idx01], v11 = grid.v[idx11];
+  if (
+    !Number.isFinite(u00) || !Number.isFinite(u10) || !Number.isFinite(u01) || !Number.isFinite(u11)
+    || !Number.isFinite(v00) || !Number.isFinite(v10) || !Number.isFinite(v01) || !Number.isFinite(v11)
+  ) {
+    return null;
+  }
+
+  const tx = gx - i0;
+  const ty = gy - j0;
+  const ua = u00 * (1 - tx) + u10 * tx;
+  const ub = u01 * (1 - tx) + u11 * tx;
+  const va = v00 * (1 - tx) + v10 * tx;
+  const vb = v01 * (1 - tx) + v11 * tx;
+  return { u: ua * (1 - ty) + ub * ty, v: va * (1 - ty) + vb * ty };
+}
+
+function gaussianBlurNaN(values: Float32Array, nx: number, ny: number, passes = 1): Float32Array {
+  let src = values.slice();
+  const kernel = [1, 4, 6, 4, 1];
+  const radius = 2;
+
+  for (let pass = 0; pass < passes; pass++) {
+    const tmp = new Float32Array(nx * ny);
+    tmp.fill(Number.NaN);
+
+    // Horizontal pass
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        let wSum = 0;
+        let vSum = 0;
+        for (let k = -radius; k <= radius; k++) {
+          const ii = i + k;
+          if (ii < 0 || ii >= nx) continue;
+          const idx = j * nx + ii;
+          const v = src[idx];
+          if (!Number.isFinite(v)) continue;
+          const w = kernel[k + radius];
+          wSum += w;
+          vSum += w * v;
+        }
+        if (wSum > 0) tmp[j * nx + i] = vSum / wSum;
+      }
+    }
+
+    const dst = new Float32Array(nx * ny);
+    dst.fill(Number.NaN);
+
+    // Vertical pass
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        let wSum = 0;
+        let vSum = 0;
+        for (let k = -radius; k <= radius; k++) {
+          const jj = j + k;
+          if (jj < 0 || jj >= ny) continue;
+          const idx = jj * nx + i;
+          const v = tmp[idx];
+          if (!Number.isFinite(v)) continue;
+          const w = kernel[k + radius];
+          wSum += w;
+          vSum += w * v;
+        }
+        if (wSum > 0) dst[j * nx + i] = vSum / wSum;
+      }
+    }
+
+    src = dst;
+  }
+
+  return src;
 }
 
 // Thin the stations by a pixel grid to reduce the number of points on the map
@@ -363,8 +558,10 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisLabelCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const analysisGridRef = useRef<AnalysisGridStore>({});
   const animationFrameRef = useRef<number | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [cursorProbe, setCursorProbe] = useState<{ x: number; y: number; lng: number; lat: number } | null>(null);
   const obsById = useMemo(() => {
     const m = new Map<string, SurfaceObs>();
     for (const s of obs) m.set(s.id, s);
@@ -611,6 +808,11 @@ const densityPx = useMemo(() => {
 
   const [includeLegendInExport, setIncludeLegendInExport] = useState<boolean>(() => {
     const saved = localStorage.getItem("includeLegendInExport");
+    return saved === null ? false : saved === "true";
+  });
+
+  const [showCursorDiagnostics, setShowCursorDiagnostics] = useState<boolean>(() => {
+    const saved = localStorage.getItem("cursorReadoutDiagnostics");
     return saved === null ? false : saved === "true";
   });
 
@@ -1095,6 +1297,8 @@ const densityPx = useMemo(() => {
     | "visibilityFill"
     | "relativeHumidityFill";
   type AnalysisOverlaySet = Record<AnalysisOverlay, boolean>;
+  type DerivedOverlay = "mixingRatio" | "moistureConvergence" | "thetaE";
+  type DerivedOverlaySet = Record<DerivedOverlay, boolean>;
   type GeographyOverlay = "adm0" | "adm1" | "adm2";
   type GeographyOverlaySet = Record<GeographyOverlay, boolean>;
   
@@ -1137,9 +1341,27 @@ const densityPx = useMemo(() => {
   || analysisOverlays.visibilityFill
   || analysisOverlays.relativeHumidityFill;
 
+  const [derivedOverlays, setDerivedOverlays] = useState<DerivedOverlaySet>(() => {
+    const saved = localStorage.getItem("derivedOverlays");
+    if (saved) {
+      try {
+        const obj = JSON.parse(saved) as Partial<DerivedOverlaySet>;
+        return {
+          mixingRatio: !!obj.mixingRatio,
+          moistureConvergence: !!obj.moistureConvergence,
+          thetaE: !!obj.thetaE,
+        };
+      } catch {}
+    }
+    return { mixingRatio: false, moistureConvergence: false, thetaE: false };
+  });
+
+  const anyAnalysisLikeOverlayOn =
+    anyOverlayOn || derivedOverlays.mixingRatio || derivedOverlays.moistureConvergence || derivedOverlays.thetaE;
+
   type LegendItem = { color: string; label: string };
   type LegendCard = { title: string; items: LegendItem[] };
-  const activeLegendCards = useMemo<LegendCard[]>(() => {
+  const activeFillLegendCards = useMemo<LegendCard[]>(() => {
     const cards: LegendCard[] = [];
     if (analysisOverlays.windSpeedFill) {
       cards.push({ title: `Wind Speed (${windUnit})`, items: windFillLegend });
@@ -1164,6 +1386,139 @@ const densityPx = useMemo(() => {
     ceilingFillLegend,
     visibilityFillLegend,
     relativeHumidityLegend,
+  ]);
+
+  type ContourLegendItem = {
+    key: "temp" | "dewpoint" | "slp" | "mixingRatio" | "moistureConvergence" | "thetaE";
+    label: string;
+    color: string;
+    width: number;
+    dash?: number[];
+  };
+  const contourLegendItems = useMemo<ContourLegendItem[]>(() => {
+    const items: ContourLegendItem[] = [];
+    if (analysisOverlays.temp) {
+      items.push({ key: "temp", label: `Temperature (°${tempUnit})`, color: "#dc2626", width: 2 });
+    }
+    if (analysisOverlays.dewpoint) {
+      items.push({ key: "dewpoint", label: `Dewpoint (°${tempUnit})`, color: "#14532d", width: 2, dash: [5, 6] });
+    }
+    if (analysisOverlays.slp) items.push({ key: "slp", label: "Sea-Level Pressure (mb)", color: "#111827", width: 3 });
+    if (derivedOverlays.mixingRatio) {
+      items.push({ key: "mixingRatio", label: "Mixing Ratio (g/kg, ≥10)", color: "#14532d", width: 3 });
+    }
+    if (derivedOverlays.thetaE) {
+      items.push({ key: "thetaE", label: "Theta-e (K, ≥330)", color: "#15803d", width: 1.2 });
+    }
+    if (derivedOverlays.moistureConvergence) {
+      items.push({
+        key: "moistureConvergence",
+        label: "Moisture Convergence (x10⁷ s⁻¹)",
+        color: "#1d4ed8",
+        width: 2.6,
+      });
+    }
+    return items;
+  }, [
+    analysisOverlays.temp,
+    analysisOverlays.dewpoint,
+    analysisOverlays.slp,
+    derivedOverlays.mixingRatio,
+    derivedOverlays.thetaE,
+    derivedOverlays.moistureConvergence,
+    tempUnit,
+  ]);
+
+  const diagnosticsRows = useMemo(() => {
+    if (!cursorProbe || !showCursorDiagnostics) return [] as Array<{ label: string; value: string }>;
+    const g = analysisGridRef.current;
+    const x = cursorProbe.x;
+    const y = cursorProbe.y;
+    const rows: Array<{ label: string; value: string }> = [];
+
+    if (analysisOverlays.temp) {
+      const v = sampleScalarGrid(g.temp, x, y);
+      rows.push({ label: `Temperature (°${tempUnit})`, value: v == null ? "—" : v.toFixed(1) });
+    }
+    if (analysisOverlays.dewpoint) {
+      const v = sampleScalarGrid(g.dewpoint, x, y);
+      rows.push({ label: `Dewpoint (°${tempUnit})`, value: v == null ? "—" : v.toFixed(1) });
+    }
+    if (analysisOverlays.slp) {
+      const v = sampleScalarGrid(g.slp, x, y);
+      rows.push({ label: "SLP (mb)", value: v == null ? "—" : v.toFixed(1) });
+    }
+    if (analysisOverlays.wind) {
+      const vv = sampleVectorGrid(g.windVector, x, y);
+      if (vv == null) {
+        rows.push({ label: `Wind (${windUnit})`, value: "—" });
+      } else {
+        const ws = uvToDirSpd(vv.u, vv.v);
+        rows.push({
+          label: `Wind (${windUnit})`,
+          value: `${Math.round(ws.dir)}° ${knotsToWindUnit(ws.spd, windUnit).toFixed(1)}`,
+        });
+      }
+    }
+    if (analysisOverlays.windSpeedFill) {
+      const v = sampleScalarGrid(g.windSpeed, x, y);
+      rows.push({
+        label: `Wind Speed Fill (${windUnit})`,
+        value: v == null ? "—" : knotsToWindUnit(v, windUnit).toFixed(1),
+      });
+    }
+    if (analysisOverlays.ceilingFill) {
+      const v = sampleScalarGrid(g.ceiling, x, y);
+      const val = v == null ? "—" : String(Math.round(v)).padStart(3, "0");
+      const suffix = v != null && v > 50 ? " (hidden on map)" : "";
+      rows.push({ label: "Ceiling (hundreds ft)", value: `${val}${suffix}` });
+    }
+    if (analysisOverlays.visibilityFill) {
+      const v = sampleScalarGrid(g.visibility, x, y);
+      const suffix = v != null && v > 6 ? " (hidden on map)" : "";
+      rows.push({ label: "Visibility (SM)", value: v == null ? "—" : `${v.toFixed(2)}${suffix}` });
+    }
+    if (analysisOverlays.relativeHumidityFill) {
+      const v = sampleScalarGrid(g.relativeHumidity, x, y);
+      const hidden = v != null && v >= 25 && v <= 90;
+      rows.push({
+        label: "Relative Humidity (%)",
+        value: v == null ? "—" : `${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
+    if (derivedOverlays.mixingRatio) {
+      const v = sampleScalarGrid(g.mixingRatio, x, y);
+      const hidden = v != null && v < 10;
+      rows.push({
+        label: "Mixing Ratio (g/kg)",
+        value: v == null ? "—" : `${v.toFixed(2)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
+    if (derivedOverlays.thetaE) {
+      const v = sampleScalarGrid(g.thetaE, x, y);
+      const hidden = v != null && v < 330;
+      rows.push({
+        label: "Theta-e (K)",
+        value: v == null ? "—" : `${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
+    if (derivedOverlays.moistureConvergence) {
+      const v = sampleScalarGrid(g.moistureConvergence, x, y);
+      const hidden = v != null && v < 1;
+      rows.push({
+        label: "Moisture Conv. (x10⁷ s⁻¹)",
+        value: v == null ? "—" : `${v.toFixed(2)}${hidden ? " (hidden on map)" : ""}`,
+      });
+    }
+
+    return rows;
+  }, [
+    cursorProbe,
+    showCursorDiagnostics,
+    analysisOverlays,
+    derivedOverlays,
+    tempUnit,
+    windUnit,
   ]);
 
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
@@ -1416,7 +1771,67 @@ function strokeIsobars(
   ctx.restore();
 }
 
-type LabelMode = "temp" | "dewpoint" | "slp";
+function strokeMixingRatioContours(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][]
+) {
+  ctx.save();
+  ctx.strokeStyle = "#14532d";
+  ctx.lineWidth = 3.0;
+  ctx.setLineDash([]);
+
+  for (const seg of segments) {
+    if (!seg || seg.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].x, seg[i].y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function strokeThetaEContours(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][]
+) {
+  ctx.save();
+  ctx.strokeStyle = "#15803d";
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([]);
+
+  for (const seg of segments) {
+    if (!seg || seg.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].x, seg[i].y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function strokeMoistureConvergenceContours(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][]
+) {
+  ctx.save();
+  ctx.strokeStyle = "#1d4ed8";
+  ctx.lineWidth = 2.6;
+  ctx.setLineDash([]);
+
+  for (const seg of segments) {
+    if (!seg || seg.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].x, seg[i].y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+type LabelMode = "temp" | "dewpoint" | "slp" | "mixingRatio" | "thetaE";
 function labelContours(
   ctx: CanvasRenderingContext2D,
   segments: Pt[][],
@@ -1439,6 +1854,12 @@ function labelContours(
   } else if (mode === "dewpoint") {
     labelColor = "#14532d";
     text = `${Math.round(level)}°${tempUnit}`;
+  } else if (mode === "mixingRatio") {
+    labelColor = "#14532d";
+    text = `${Math.round(level)} g/kg`;
+  } else if (mode === "thetaE") {
+    labelColor = "#15803d";
+    text = `${Math.round(level)}K`;
   } else {
     // slp
     labelColor = "#111827";
@@ -1503,7 +1924,10 @@ function labelContours(
 
 // Draw the analysis overlay on the canvas
 const drawAnalysisOverlay = useCallback(() => {
-  if (!anyOverlayOn) return;
+  if (!anyAnalysisLikeOverlayOn) {
+    analysisGridRef.current = {};
+    return;
+  }
 
   const canvas = analysisCanvasRef.current;
   const mapObj = mapRef.current?.getMap();
@@ -1533,7 +1957,10 @@ const drawAnalysisOverlay = useCallback(() => {
 
   // Use declutteredObs as requested
   const stations = declutteredObs;
-  if (!stations || stations.length === 0) return;
+  if (!stations || stations.length === 0) {
+    analysisGridRef.current = {};
+    return;
+  }
 
   // Performance knobs (contours are heavier than shading)
   const step = 24;          // grid spacing in pixels; 20–32 is typical
@@ -1542,6 +1969,7 @@ const drawAnalysisOverlay = useCallback(() => {
   const maxRadius2 = maxRadius * maxRadius;
   const kMax = 10;
   const windStep = 42;
+  const computedGrids: AnalysisGridStore = {};
 
   function windFillColorForSpeedKt(spdKt: number): string {
     const value = knotsToWindUnit(spdKt, windUnit);
@@ -1606,6 +2034,7 @@ const drawAnalysisOverlay = useCallback(() => {
         gridVals[j * nx + i] = vSum / wSum;
       }
     }
+    computedGrids.windSpeed = { values: gridVals, nx, ny, step: fillStep };
 
     ctx.save();
     ctx.globalAlpha = 0.46;
@@ -1684,8 +2113,8 @@ const drawAnalysisOverlay = useCallback(() => {
     alpha = 0.44,
     radiusPx = 120,
     minNeighbors = 4,
-  ) {
-    if (pts.length < 3) return;
+  ): ScalarGrid | null {
+    if (pts.length < 3) return null;
 
     const fillStep = 6;
     const nx = Math.floor(width / fillStep) + 1;
@@ -1743,7 +2172,7 @@ const drawAnalysisOverlay = useCallback(() => {
     const offCtx = offscreen.getContext("2d");
     if (!offCtx) {
       ctx.restore();
-      return;
+      return null;
     }
 
     const image = offCtx.createImageData(nx, ny);
@@ -1778,6 +2207,7 @@ const drawAnalysisOverlay = useCallback(() => {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(offscreen, 0, 0, nx, ny, 0, 0, width, height);
     ctx.restore();
+    return { values: gridVals, nx, ny, step: fillStep };
   }
 
   function drawCeilingFill() {
@@ -1789,7 +2219,8 @@ const drawAnalysisOverlay = useCallback(() => {
       const p = map.project([s.lon, s.lat]);
       pts.push({ x: p.x, y: p.y, val: ceilingHundreds });
     }
-    drawScalarFill(pts, scalarFillColorForCeilingHundreds, 0.44, 110, 4);
+    const grid = drawScalarFill(pts, scalarFillColorForCeilingHundreds, 0.44, 110, 4);
+    if (grid) computedGrids.ceiling = grid;
   }
 
   function drawVisibilityFill() {
@@ -1800,7 +2231,8 @@ const drawAnalysisOverlay = useCallback(() => {
       const p = map.project([s.lon, s.lat]);
       pts.push({ x: p.x, y: p.y, val: s.visibilityMi });
     }
-    drawScalarFill(pts, scalarFillColorForVisibilityMi, 0.44, 110, 4);
+    const grid = drawScalarFill(pts, scalarFillColorForVisibilityMi, 0.44, 110, 4);
+    if (grid) computedGrids.visibility = grid;
   }
 
   function drawRelativeHumidityFill() {
@@ -1811,7 +2243,165 @@ const drawAnalysisOverlay = useCallback(() => {
       const p = map.project([s.lon, s.lat]);
       pts.push({ x: p.x, y: p.y, val: s.relativeHumidity });
     }
-    drawScalarFill(pts, scalarFillColorForRelativeHumidity, 0.44, 110, 4);
+    const grid = drawScalarFill(pts, scalarFillColorForRelativeHumidity, 0.44, 110, 4);
+    if (grid) computedGrids.relativeHumidity = grid;
+  }
+
+  function drawMoistureConvergenceContours() {
+    const pts: Array<{ x: number; y: number; u: number; v: number; q: number }> = [];
+    for (const s of declutteredObs) {
+      if (isExcludedFromAnalysis(s, "wind")) continue;
+      if (isExcludedFromAnalysis(s, "dewpoint") || isExcludedFromAnalysis(s, "slp")) continue;
+      if (s.windDirDeg == null || s.windSpeedKt == null) continue;
+      if (s.dewpointC == null || s.pressureMb == null) continue;
+
+      const wGkg = mixingRatioGkgFromDewpointPressure(s.dewpointC, s.pressureMb);
+      if (wGkg == null) continue;
+      const r = wGkg / 1000; // kg/kg
+      const q = r / (1 + r); // specific humidity (kg/kg)
+      if (!Number.isFinite(q) || q <= 0) continue;
+
+      const p = map.project([s.lon, s.lat]);
+      const uvKt = windToUV(s.windDirDeg, s.windSpeedKt);
+      const u = uvKt.u * 0.514444;
+      const v = uvKt.v * 0.514444;
+      pts.push({ x: p.x, y: p.y, u, v, q });
+    }
+    if (pts.length < 6) return;
+
+    const convStep = 12;
+    const nx = Math.floor(width / convStep) + 1;
+    const ny = Math.floor(height / convStep) + 1;
+    // Stronger pre-smoothing for moisture convergence inputs (u/v/q).
+    const radiusPx = 190;
+    const minNeighbors = 7;
+    const kMaxMoist = 16;
+    const interpPower = 1.35;
+    const localMaxRadius2 = radiusPx * radiusPx;
+
+    const gridU = new Float32Array(nx * ny);
+    const gridV = new Float32Array(nx * ny);
+    const gridQ = new Float32Array(nx * ny);
+    gridU.fill(Number.NaN);
+    gridV.fill(Number.NaN);
+    gridQ.fill(Number.NaN);
+
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const gx = i * convStep;
+        const gy = j * convStep;
+        const neighbors: Array<{ d2: number; u: number; v: number; q: number }> = [];
+
+        for (const p of pts) {
+          const dx = p.x - gx;
+          const dy = p.y - gy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > localMaxRadius2) continue;
+
+          let inserted = false;
+          for (let k = 0; k < neighbors.length; k++) {
+            if (d2 < neighbors[k].d2) {
+              neighbors.splice(k, 0, { d2, u: p.u, v: p.v, q: p.q });
+              inserted = true;
+              break;
+            }
+          }
+          if (!inserted) neighbors.push({ d2, u: p.u, v: p.v, q: p.q });
+          if (neighbors.length > kMaxMoist) neighbors.pop();
+        }
+
+        if (neighbors.length < minNeighbors) continue;
+
+        let wSum = 0;
+        let uSum = 0;
+        let vSum = 0;
+        let qSum = 0;
+        for (const n of neighbors) {
+          const w = 1 / Math.pow(Math.max(n.d2, 9), interpPower / 2);
+          wSum += w;
+          uSum += w * n.u;
+          vSum += w * n.v;
+          qSum += w * n.q;
+        }
+        if (wSum <= 0) continue;
+
+        const idx = j * nx + i;
+        gridU[idx] = uSum / wSum;
+        gridV[idx] = vSum / wSum;
+        gridQ[idx] = qSum / wSum;
+      }
+    }
+
+    const center = map.unproject([width / 2, height / 2]);
+    const east = map.unproject([width / 2 + 1, height / 2]);
+    const north = map.unproject([width / 2, height / 2 - 1]);
+    const metersPerPixelX = Math.max(1, haversineMeters(center.lat, center.lng, center.lat, east.lng));
+    const metersPerPixelY = Math.max(1, haversineMeters(center.lat, center.lng, north.lat, center.lng));
+    const dxM = convStep * metersPerPixelX;
+    const dyM = convStep * metersPerPixelY;
+
+    const fullVals = new Float32Array(nx * ny);
+    const displayVals = new Float32Array(nx * ny);
+    fullVals.fill(Number.NaN);
+    displayVals.fill(Number.NaN);
+
+    for (let j = 1; j < ny - 1; j++) {
+      for (let i = 1; i < nx - 1; i++) {
+        const idx = j * nx + i;
+        const idxL = j * nx + (i - 1);
+        const idxR = j * nx + (i + 1);
+        const idxN = (j - 1) * nx + i;
+        const idxS = (j + 1) * nx + i;
+
+        const uL = gridU[idxL];
+        const uR = gridU[idxR];
+        const vN = gridV[idxN];
+        const vS = gridV[idxS];
+        const q = gridQ[idx];
+        if (!Number.isFinite(uL) || !Number.isFinite(uR) || !Number.isFinite(vN) || !Number.isFinite(vS) || !Number.isFinite(q)) {
+          continue;
+        }
+
+        const duDx = (uR - uL) / (2 * dxM);
+        const dvDy = (vN - vS) / (2 * dyM);
+        const convergence = -(duDx + dvDy); // positive in convergent flow
+        if (!Number.isFinite(convergence)) continue;
+
+        const moistureConvergence = q * convergence; // s^-1
+        const displayValue = moistureConvergence * 1e7;
+        fullVals[idx] = displayValue;
+        if (displayValue > 0) displayVals[idx] = displayValue;
+      }
+    }
+    // Post-filter moisture convergence to emphasize mesoscale signal.
+    const fullValsSmoothed = gaussianBlurNaN(fullVals, nx, ny, 2);
+    computedGrids.moistureConvergence = { values: fullValsSmoothed, nx, ny, step: convStep };
+
+    const displayValsSmoothed = new Float32Array(nx * ny);
+    displayValsSmoothed.fill(Number.NaN);
+    for (let idx = 0; idx < displayValsSmoothed.length; idx++) {
+      const v = fullValsSmoothed[idx];
+      if (Number.isFinite(v) && v > 0) displayValsSmoothed[idx] = v;
+    }
+
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (let idx = 0; idx < displayValsSmoothed.length; idx++) {
+      const v = displayValsSmoothed[idx];
+      if (!Number.isFinite(v)) continue;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    if (!Number.isFinite(minV) || !Number.isFinite(maxV)) return;
+
+    const levels = MOISTURE_CONV_LEVELS_X1E7
+      .slice(1, -1)
+      .filter((v) => v >= minV && v <= maxV);
+    for (const level of levels) {
+      const segments = contoursForLevel(displayValsSmoothed, nx, ny, convStep, level);
+      if (segments.length === 0) continue;
+      strokeMoistureConvergenceContours(ctx, segments);
+    }
   }
 
   function drawWind() {
@@ -1877,6 +2467,7 @@ const drawAnalysisOverlay = useCallback(() => {
         gridV[idx] = vSum / wSum;
       }
     }
+    computedGrids.windVector = { u: gridU, v: gridV, nx, ny, step: windStep };
   
     // Draw barbs at each valid grid point
     ctx.save();
@@ -1915,7 +2506,7 @@ const drawAnalysisOverlay = useCallback(() => {
     ctx.restore();
   }
 
-  function drawOne(mode: "temp" | "dewpoint" | "slp") {
+  function drawOne(mode: "temp" | "dewpoint" | "slp" | "mixingRatio" | "thetaE") {
     // Build pts for THIS field
     const pts: Array<{ x: number; y: number; val: number }> = [];
     for (const s of declutteredObs) {
@@ -1931,10 +2522,26 @@ const drawAnalysisOverlay = useCallback(() => {
         if (s.dewpointC == null) continue;
         const val = tempUnit === "F" ? celsiusToFahrenheit(s.dewpointC) : s.dewpointC;
         pts.push({ x: p.x, y: p.y, val });
-      } else {
+      } else if (mode === "slp") {
         if (isExcludedFromAnalysis(s, "slp")) continue;
         if (s.pressureMb == null) continue;
         pts.push({ x: p.x, y: p.y, val: s.pressureMb });
+      } else if (mode === "mixingRatio") {
+        if (isExcludedFromAnalysis(s, "dewpoint") || isExcludedFromAnalysis(s, "slp")) continue;
+        if (s.dewpointC == null || s.pressureMb == null) continue;
+        const mixingRatio = mixingRatioGkgFromDewpointPressure(s.dewpointC, s.pressureMb);
+        if (mixingRatio == null) continue;
+        pts.push({ x: p.x, y: p.y, val: mixingRatio });
+      } else {
+        if (
+          isExcludedFromAnalysis(s, "temp")
+          || isExcludedFromAnalysis(s, "dewpoint")
+          || isExcludedFromAnalysis(s, "slp")
+        ) continue;
+        if (s.tempC == null || s.dewpointC == null || s.pressureMb == null) continue;
+        const thetaE = equivalentPotentialTemperatureK(s.tempC, s.dewpointC, s.pressureMb);
+        if (thetaE == null) continue;
+        pts.push({ x: p.x, y: p.y, val: thetaE });
       }
     }
     if (pts.length < 3) return;
@@ -1983,6 +2590,11 @@ const drawAnalysisOverlay = useCallback(() => {
         gridVals[j * nx + i] = vSum / wSum;
       }
     }
+    if (mode === "temp") computedGrids.temp = { values: gridVals, nx, ny, step };
+    else if (mode === "dewpoint") computedGrids.dewpoint = { values: gridVals, nx, ny, step };
+    else if (mode === "slp") computedGrids.slp = { values: gridVals, nx, ny, step };
+    else if (mode === "mixingRatio") computedGrids.mixingRatio = { values: gridVals, nx, ny, step };
+    else if (mode === "thetaE") computedGrids.thetaE = { values: gridVals, nx, ny, step };
   
     // min/max
     let minV = Infinity, maxV = -Infinity;
@@ -2015,6 +2627,16 @@ const drawAnalysisOverlay = useCallback(() => {
       const kStart = Math.floor((minV - base) / stepMb);
       const kEnd = Math.ceil((maxV - base) / stepMb);
       for (let k = kStart; k <= kEnd; k++) levels.push(base + k * stepMb);
+    } else if (mode === "mixingRatio") {
+      const stepGkg = 2;
+      const start = Math.max(10, Math.floor(minV / stepGkg) * stepGkg);
+      const end = Math.ceil(maxV / stepGkg) * stepGkg;
+      for (let v = start; v <= end; v += stepGkg) levels.push(v);
+    } else if (mode === "thetaE") {
+      const stepK = 2;
+      const start = Math.max(330, Math.floor(minV / stepK) * stepK);
+      const end = Math.ceil(maxV / stepK) * stepK;
+      for (let v = start; v <= end; v += stepK) levels.push(v);
     }
   
     // draw
@@ -2028,9 +2650,15 @@ const drawAnalysisOverlay = useCallback(() => {
       } else if (mode === "dewpoint") {
         strokeIsodrosotherms(ctx, segments, level);
         labelContours(ctx, segments, level, "dewpoint", { tempUnit });
-      } else {
+      } else if (mode === "slp") {
         strokeIsobars(ctx, segments, level);
         labelContours(ctx, segments, level, "slp", { tempUnit });
+      } else if (mode === "mixingRatio") {
+        strokeMixingRatioContours(ctx, segments);
+        labelContours(ctx, segments, level, "mixingRatio", { tempUnit });
+      } else {
+        strokeThetaEContours(ctx, segments);
+        labelContours(ctx, segments, level, "thetaE", { tempUnit });
       }
     }
   
@@ -2050,14 +2678,18 @@ const drawAnalysisOverlay = useCallback(() => {
     if (analysisOverlays.ceilingFill) drawCeilingFill();
     if (analysisOverlays.visibilityFill) drawVisibilityFill();
     if (analysisOverlays.relativeHumidityFill) drawRelativeHumidityFill();
+    if (derivedOverlays.moistureConvergence) drawMoistureConvergenceContours();
     // draw order: pressure under, dewpoint, then temp on top
     if (analysisOverlays.slp) drawOne("slp");
     if (analysisOverlays.dewpoint) drawOne("dewpoint");
     if (analysisOverlays.temp) drawOne("temp");
+    if (derivedOverlays.mixingRatio) drawOne("mixingRatio");
+    if (derivedOverlays.thetaE) drawOne("thetaE");
     if (analysisOverlays.wind) drawWind();
   
+    analysisGridRef.current = computedGrids;
     ctx.globalAlpha = 1;
-  }, [analysisOverlays, declutteredObs, tempUnit, anyOverlayOn, windRenderMode, windUnit]);
+  }, [analysisOverlays, derivedOverlays, declutteredObs, tempUnit, anyAnalysisLikeOverlayOn, windRenderMode, windUnit]);
 
 function windToUV(dirDeg: number, spdKt: number) {
   // METAR direction is "from" direction.
@@ -2110,7 +2742,7 @@ const exportPng = useCallback(() => {
   }
 
   // 3) optional legend cards
-  if (includeLegendInExport && activeLegendCards.length > 0) {
+  if (includeLegendInExport) {
     const dpr = window.devicePixelRatio || 1;
     const scale = dpr;
     const margin = 14 * scale;
@@ -2137,22 +2769,68 @@ const exportPng = useCallback(() => {
       ctx.closePath();
     };
 
-    let yBottom = height - margin;
     ctx.textBaseline = "alphabetic";
+    if (activeFillLegendCards.length > 0) {
+      let yBottom = height - margin;
+      for (let cardIdx = activeFillLegendCards.length - 1; cardIdx >= 0; cardIdx -= 1) {
+        const card = activeFillLegendCards[cardIdx];
+        ctx.font = `600 ${titleFontSize}px sans-serif`;
+        let maxTextWidth = Math.ceil(ctx.measureText(card.title).width);
+        ctx.font = `${fontSize}px sans-serif`;
+        for (const item of card.items) {
+          maxTextWidth = Math.max(maxTextWidth, Math.ceil(ctx.measureText(item.label).width));
+        }
 
-    for (let cardIdx = activeLegendCards.length - 1; cardIdx >= 0; cardIdx -= 1) {
-      const card = activeLegendCards[cardIdx];
+        const cardWidth = Math.max(142 * scale, padX * 2 + swatch + swatchGap + maxTextWidth);
+        const cardHeight = padY * 2 + titleH + titleGap + card.items.length * lineH;
+        const x = margin;
+        const y = yBottom - cardHeight;
+
+        drawRoundRect(x, y, cardWidth, cardHeight, borderRadius);
+        ctx.fillStyle = "rgba(2, 6, 23, 0.84)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+        ctx.lineWidth = 1 * scale;
+        ctx.stroke();
+
+        ctx.fillStyle = "#e5e7eb";
+        ctx.font = `700 ${titleFontSize}px sans-serif`;
+        ctx.fillText(card.title.toUpperCase(), x + padX, y + padY + titleH - 2 * scale);
+
+        ctx.font = `${fontSize}px sans-serif`;
+        for (let i = 0; i < card.items.length; i++) {
+          const item = card.items[i];
+          const rowY = y + padY + titleH + titleGap + i * lineH;
+          const swX = x + padX;
+          const swY = rowY + (lineH - swatch) / 2;
+          drawRoundRect(swX, swY, swatch, swatch, 3 * scale);
+          ctx.fillStyle = item.color;
+          ctx.fill();
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.32)";
+          ctx.lineWidth = 1 * scale;
+          ctx.stroke();
+
+          ctx.fillStyle = "#e5e7eb";
+          ctx.fillText(item.label, swX + swatch + swatchGap, rowY + lineH * 0.78);
+        }
+        yBottom = y - rowGap;
+      }
+    }
+
+    if (contourLegendItems.length > 0) {
       ctx.font = `600 ${titleFontSize}px sans-serif`;
-      let maxTextWidth = Math.ceil(ctx.measureText(card.title).width);
+      let maxTextWidth = Math.ceil(ctx.measureText("Contours").width);
       ctx.font = `${fontSize}px sans-serif`;
-      for (const item of card.items) {
+      for (const item of contourLegendItems) {
         maxTextWidth = Math.max(maxTextWidth, Math.ceil(ctx.measureText(item.label).width));
       }
 
-      const cardWidth = Math.max(142 * scale, padX * 2 + swatch + swatchGap + maxTextWidth);
-      const cardHeight = padY * 2 + titleH + titleGap + card.items.length * lineH;
-      const x = margin;
-      const y = yBottom - cardHeight;
+      const lineSampleW = 22 * scale;
+      const sampleGap = 7 * scale;
+      const cardWidth = Math.max(168 * scale, padX * 2 + lineSampleW + sampleGap + maxTextWidth);
+      const cardHeight = padY * 2 + titleH + titleGap + contourLegendItems.length * lineH;
+      const x = width - margin - cardWidth;
+      const y = height - margin - cardHeight;
 
       drawRoundRect(x, y, cardWidth, cardHeight, borderRadius);
       ctx.fillStyle = "rgba(2, 6, 23, 0.84)";
@@ -2163,26 +2841,27 @@ const exportPng = useCallback(() => {
 
       ctx.fillStyle = "#e5e7eb";
       ctx.font = `700 ${titleFontSize}px sans-serif`;
-      ctx.fillText(card.title.toUpperCase(), x + padX, y + padY + titleH - 2 * scale);
+      ctx.fillText("CONTOURS", x + padX, y + padY + titleH - 2 * scale);
 
       ctx.font = `${fontSize}px sans-serif`;
-      for (let i = 0; i < card.items.length; i++) {
-        const item = card.items[i];
+      for (let i = 0; i < contourLegendItems.length; i++) {
+        const item = contourLegendItems[i];
         const rowY = y + padY + titleH + titleGap + i * lineH;
-        const swX = x + padX;
-        const swY = rowY + (lineH - swatch) / 2;
-        drawRoundRect(swX, swY, swatch, swatch, 3 * scale);
-        ctx.fillStyle = item.color;
-        ctx.fill();
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.32)";
-        ctx.lineWidth = 1 * scale;
+        const lineY = rowY + lineH * 0.5;
+        const x0 = x + padX;
+        const x1 = x0 + lineSampleW;
+        ctx.beginPath();
+        ctx.moveTo(x0, lineY);
+        ctx.lineTo(x1, lineY);
+        ctx.strokeStyle = item.color;
+        ctx.lineWidth = item.width * scale * 0.6;
+        ctx.setLineDash(item.dash ? item.dash.map((d) => d * scale * 0.6) : []);
         ctx.stroke();
+        ctx.setLineDash([]);
 
         ctx.fillStyle = "#e5e7eb";
-        ctx.fillText(item.label, swX + swatch + swatchGap, rowY + lineH * 0.78);
+        ctx.fillText(item.label, x1 + sampleGap, rowY + lineH * 0.78);
       }
-
-      yBottom = y - rowGap;
     }
   }
 
@@ -2192,7 +2871,7 @@ const exportPng = useCallback(() => {
   a.href = dataUrl;
   a.download = `wx-mesoanalysis_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   a.click();
-}, [showStations, displayMode, includeLegendInExport, activeLegendCards]);
+}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems]);
 
 useEffect(() => {
   localStorage.setItem("showStations", String(showStations));
@@ -2200,13 +2879,17 @@ useEffect(() => {
 
 useEffect(() => {
   if (!mapLoaded) return;
-  if (!anyOverlayOn) return;
+  if (!anyAnalysisLikeOverlayOn) return;
   drawAnalysisOverlay();
-}, [mapLoaded, anyOverlayOn, drawAnalysisOverlay]);
+}, [mapLoaded, anyAnalysisLikeOverlayOn, drawAnalysisOverlay]);
 
 useEffect(() => {
   localStorage.setItem("analysisOverlays", JSON.stringify(analysisOverlays));
 }, [analysisOverlays]);
+
+useEffect(() => {
+  localStorage.setItem("derivedOverlays", JSON.stringify(derivedOverlays));
+}, [derivedOverlays]);
 
 useEffect(() => {
   localStorage.setItem("windUnit", windUnit);
@@ -2215,6 +2898,14 @@ useEffect(() => {
 useEffect(() => {
   localStorage.setItem("includeLegendInExport", String(includeLegendInExport));
 }, [includeLegendInExport]);
+
+useEffect(() => {
+  localStorage.setItem("cursorReadoutDiagnostics", String(showCursorDiagnostics));
+}, [showCursorDiagnostics]);
+
+useEffect(() => {
+  if (!showCursorDiagnostics) setCursorProbe(null);
+}, [showCursorDiagnostics]);
 
 useEffect(() => {
   localStorage.setItem("geographyOverlays", JSON.stringify(geographyOverlays));
@@ -2243,7 +2934,7 @@ useEffect(() => {
 
   const raf = requestAnimationFrame(() => {
     // analysis overlay
-    if (anyOverlayOn) drawAnalysisOverlay();
+    if (anyAnalysisLikeOverlayOn) drawAnalysisOverlay();
 
     // station plots
     if (showStations && displayMode === "plots") drawStationPlots();
@@ -2256,7 +2947,7 @@ useEffect(() => {
 }, [
   mapLoaded,
   obs,                 // redraw when the frame changes
-  anyOverlayOn,
+  anyAnalysisLikeOverlayOn,
   drawAnalysisOverlay,
   showStations,
   displayMode,
@@ -2352,6 +3043,44 @@ useEffect(() => {
                       }
                     />
                     Relative Humidity (Critical Fill)
+                  </label>
+                </div>
+              </details>
+            </div>
+            <div className="analysis-control">
+              <div className="analysis-title">Derived Fields</div>
+              <details className="analysis-dropdown">
+                <summary>Derived Fields</summary>
+                <div className="analysis-menu">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={derivedOverlays.mixingRatio}
+                      onChange={(e) =>
+                        setDerivedOverlays((s) => ({ ...s, mixingRatio: e.target.checked }))
+                      }
+                    />
+                    Mixing Ratio (≥10 g/kg)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={derivedOverlays.thetaE}
+                      onChange={(e) =>
+                        setDerivedOverlays((s) => ({ ...s, thetaE: e.target.checked }))
+                      }
+                    />
+                    Theta-e (Contours)
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={derivedOverlays.moistureConvergence}
+                      onChange={(e) =>
+                        setDerivedOverlays((s) => ({ ...s, moistureConvergence: e.target.checked }))
+                      }
+                    />
+                    Moisture Convergence (Contours)
                   </label>
                 </div>
               </details>
@@ -2469,7 +3198,7 @@ useEffect(() => {
       <main className="app-main">
         <section className="map-panel">
           <div className="map-container">
-            {anyOverlayOn && (
+            {anyAnalysisLikeOverlayOn && (
               <canvas
                 ref={analysisCanvasRef}
                 className="analysis-canvas"
@@ -2501,7 +3230,7 @@ useEffect(() => {
               />
             )}
 
-            {anyOverlayOn && (
+            {anyAnalysisLikeOverlayOn && (
               <canvas
                 ref={analysisLabelCanvasRef}
                 className="analysis-label-canvas"
@@ -2577,6 +3306,29 @@ useEffect(() => {
               </div>
             )}
 
+            {contourLegendItems.length > 0 && (
+              <div className="contour-legends">
+                <div className="analysis-legend">
+                  <div className="wind-fill-legend-title">Contours</div>
+                  <ul className="wind-fill-legend-list">
+                    {contourLegendItems.map((item) => (
+                      <li key={`contour-legend-${item.key}`}>
+                        <span
+                          className="contour-line-swatch"
+                          style={{
+                            borderTopColor: item.color,
+                            borderTopWidth: `${item.width}px`,
+                            borderTopStyle: item.dash ? "dashed" : "solid",
+                          }}
+                        />
+                        <span>{item.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             <MapGL
               preserveDrawingBuffer={true}
               onLoad={() => setMapLoaded(true)}
@@ -2594,6 +3346,19 @@ useEffect(() => {
                   ? (displayMode === "plots" ? ["hit-targets"] : ["unclustered"])
                   : []
               }
+              onMouseMove={(e) => {
+                if (!showCursorDiagnostics) return;
+                setCursorProbe({
+                  x: e.point.x,
+                  y: e.point.y,
+                  lng: e.lngLat.lng,
+                  lat: e.lngLat.lat,
+                });
+              }}
+              onMouseLeave={() => {
+                if (!showCursorDiagnostics) return;
+                setCursorProbe(null);
+              }}
               onClick={(e) => {
                 if (!showStations) return;
                 const map = mapRef.current?.getMap();
@@ -2661,6 +3426,33 @@ useEffect(() => {
               </p>
             )}
           </div>
+          {showCursorDiagnostics && (
+            <div className="diagnostics-panel">
+              <div className="diagnostics-title">Cursor Diagnostics</div>
+              {!cursorProbe ? (
+                <div className="diagnostics-empty">Move cursor over map to inspect enabled fields.</div>
+              ) : (
+                <>
+                  <div className="diagnostics-meta">
+                    <span>{cursorProbe.lat.toFixed(3)}°, {cursorProbe.lng.toFixed(3)}°</span>
+                    <span>{lastUpdate ? formatZulu(lastUpdate) : "—"}</span>
+                  </div>
+                  {diagnosticsRows.length === 0 ? (
+                    <div className="diagnostics-empty">No enabled analysis/derived fields.</div>
+                  ) : (
+                    <div className="diagnostics-table">
+                      {diagnosticsRows.map((row) => (
+                        <div key={`diag-${row.label}`} className="diagnostics-row">
+                          <span className="diagnostics-label">{row.label}</span>
+                          <span className="diagnostics-value">{row.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {!isLoading && obs.length > 0 && (
             <div className="sidebar-content">
               <ul className="obs-list">
@@ -3019,6 +3811,14 @@ useEffect(() => {
 
               <div className="options-section">
                 <div className="options-section-title">Export</div>
+                <label className="options-check">
+                  <input
+                    type="checkbox"
+                    checked={showCursorDiagnostics}
+                    onChange={(e) => setShowCursorDiagnostics(e.target.checked)}
+                  />
+                  Cursor Readout Diagnostics
+                </label>
                 <label className="options-check">
                   <input
                     type="checkbox"
