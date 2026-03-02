@@ -17,3 +17,6 @@ build/
 
 # Zip files
 *.zip
+
+# Local runtime / data cache
+data/

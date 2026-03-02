@@ -4,5 +4,8 @@ pydantic
 requests
 metar
 metpy
-
-
+pandas
+shapely
+numpy
+Pillow
+pygrib

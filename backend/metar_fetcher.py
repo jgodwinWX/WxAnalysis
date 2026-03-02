@@ -123,7 +123,7 @@ def fetch_station_metadata() -> dict:
     Returns dict mapping station ID to descriptive name.
     """
     # Try to load from APT_BASE.csv file
-    csv_path = Path(__file__).parent / "data" / "APT_BASE.csv"
+    csv_path = Path(__file__).resolve().parent.parent / "data" / "APT_BASE.csv"
     if csv_path.exists():
         try:
             metadata = {}

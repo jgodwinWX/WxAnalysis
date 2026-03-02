@@ -35,6 +35,149 @@ type SurfaceObs = {
 type TempUnit = "F" | "C";
 type WindUnit = "KT" | "MPH" | "KPH";
 type DisplayTimeZone = "UTC" | "LOCAL";
+type MrmsField = "none" | "rala" | "composite" | "etop18" | "rotation240";
+type NwsProduct = "none" | "wpcSurface";
+type FrontRenderStyle = "simple" | "classic";
+
+type MrmsMetaResponse = {
+  product: "rala" | "composite" | "etop18" | "rotation240";
+  requested_time: string | null;
+  matched_time: string;
+  latest_time: string;
+  age_minutes: number;
+  stale_warning: boolean;
+  available_times: string[];
+  image_url: string;
+  tile_url_template?: string;
+  corners?: [[number, number], [number, number], [number, number], [number, number]];
+  bbox: {
+    min_lon: number;
+    min_lat: number;
+    max_lon: number;
+    max_lat: number;
+  };
+};
+
+type MrmsValueResponse = {
+  product: "rala" | "composite" | "etop18" | "rotation240";
+  requested_time: string | null;
+  matched_time: string;
+  latest_time: string;
+  age_minutes: number;
+  stale_warning: boolean;
+  lat: number;
+  lon: number;
+  unit?: string;
+  value?: number | null;
+  value_dbz: number | null;
+};
+
+type GeoJsonFeatureCollection = {
+  type: "FeatureCollection";
+  features: any[];
+};
+
+type WpcSurfaceResponse = {
+  product: "wpc_surface";
+  source_url: string;
+  fetched_at: string;
+  valid_time: string | null;
+  age_minutes: number | null;
+  stale_warning: boolean;
+  fronts: GeoJsonFeatureCollection;
+  centers: GeoJsonFeatureCollection;
+  counts: {
+    fronts: number;
+    centers: number;
+  };
+  front_types_present?: string[];
+};
+
+type OpsSourceStats = {
+  success: number;
+  failure: number;
+  last_success: string | null;
+  last_failure: string | null;
+  last_error: string | null;
+  last_duration_ms: number | null;
+};
+
+type OpsSummaryResponse = {
+  generated_at: string;
+  health: {
+    status: "ok" | "degraded" | "error";
+    generated_at: string;
+    uptime_seconds: number;
+    started_at: string;
+    last_update: string | null;
+    station_count: number;
+    storage_total_bytes: number;
+    metar_latest_age_minutes: number | null;
+  };
+  freshness: {
+    generated_at: string;
+    metar: {
+      latest_update: string | null;
+      latest_age_minutes: number | null;
+      latest_station_count: number;
+      latest_snapshot_time: string | null;
+      latest_snapshot_station_count: number;
+      snapshot_count: number;
+    };
+    mrms: {
+      rala: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+      composite: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+      etop18: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+      rotation240: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+    };
+    wpc: {
+      status: string;
+      valid_time?: string | null;
+      valid_age_minutes?: number | null;
+      stale_warning?: boolean;
+      expected_cycle_valid_time?: string | null;
+      expected_issue_time?: string | null;
+      overdue_threshold_time?: string | null;
+      overdue_by_minutes?: number | null;
+      front_count?: number;
+      center_count?: number;
+      error?: string;
+    };
+  };
+  storage: {
+    generated_at: string;
+    components: Record<string, { bytes: number; files: number; oldest_mtime: string | null; newest_mtime: string | null; exists: boolean }>;
+  };
+  errors: {
+    generated_at: string;
+    sources: Record<string, OpsSourceStats>;
+  };
+  config: Record<string, number>;
+};
 
 const WIND_FILL_BINS_KT = [0, 5, 10, 15, 20, 30, 40, 60, Number.POSITIVE_INFINITY];
 const WIND_FILL_COLORS = [
@@ -72,6 +215,98 @@ const RH_DRY_COLORS = ["#dc2626", "#fb923c", "#facc15"];
 const RH_MOIST_LEVELS = [90, 95, 100];
 const RH_MOIST_COLORS = ["#86efac", "#166534"];
 const MOISTURE_CONV_LEVELS_X1E7 = [0, 1, 2, 4, 6, 8, 10, 14, 20, Number.POSITIVE_INFINITY];
+const RALA_LEGEND_ITEMS = [
+  { color: "#191919", label: ">=75 dBZ" },
+  { color: "#ffffff", label: "65-75 dBZ" },
+  { color: "#ffc8ff", label: "50-65 dBZ" },
+  { color: "#ff0000", label: "40-50 dBZ" },
+  { color: "#ffff6e", label: "20-40 dBZ" },
+  { color: "#6eff6e", label: "0-20 dBZ" },
+  { color: "#004b82", label: "-35-0 dBZ" },
+  { color: "#ffffff", label: "<-35 dBZ" },
+];
+const ETOP18_LEGEND_ITEMS = [
+  { color: "#ffffff", label: ">=70 kft" },
+  { color: "#ff00ff", label: "65-70 kft" },
+  { color: "#d2b4c8", label: "60-65 kft" },
+  { color: "#dc0000", label: "50-60 kft" },
+  { color: "#b4b400", label: "40-50 kft" },
+  { color: "#1edc1e", label: "30-40 kft" },
+  { color: "#4614c8", label: "20-30 kft" },
+  { color: "#4678e6", label: "15-20 kft" },
+  { color: "#46bed2", label: "10-15 kft" },
+  { color: "#46d2d2", label: "6-10 kft" },
+  { color: "#8cb4b4", label: "2-6 kft" },
+  { color: "#bebebe", label: "0-2 kft" },
+];
+const ROT240_LEGEND_ITEMS = [
+  { color: "#5ae6e6", label: ">=0.020 1/s" },
+  { color: "#ffffff", label: "0.015-0.020 1/s" },
+  { color: "#ff0000", label: "0.014-0.015 1/s" },
+  { color: "#be0000", label: "0.013-0.014 1/s" },
+  { color: "#aa0000", label: "0.012-0.013 1/s" },
+  { color: "#960000", label: "0.011-0.012 1/s" },
+  { color: "#820000", label: "0.010-0.011 1/s" },
+  { color: "#ffff00", label: "0.009-0.010 1/s" },
+  { color: "#d2d200", label: "0.008-0.009 1/s" },
+  { color: "#aaaa00", label: "0.007-0.008 1/s" },
+  { color: "#828200", label: "0.006-0.007 1/s" },
+  { color: "#64645f", label: "0.005-0.006 1/s" },
+  { color: "#969696", label: "0.004-0.005 1/s" },
+  { color: "#b4bebe", label: "0.003-0.004 1/s" },
+  { color: "#d2dcdc", label: "0.000-0.003 1/s" },
+];
+const REFL_GRADIENT_BREAKS = [
+  { value: -35, color: "#ffffff" },
+  { value: 0, color: "#1e1e1e" },
+  { value: 0, color: "#004b82" },
+  { value: 20, color: "#8282fa" },
+  { value: 20, color: "#6eff6e" },
+  { value: 40, color: "#003c00" },
+  { value: 40, color: "#ffff6e" },
+  { value: 50, color: "#ff6e00" },
+  { value: 50, color: "#ff0000" },
+  { value: 65, color: "#5a0000" },
+  { value: 65, color: "#ffc8ff" },
+  { value: 75, color: "#5a005a" },
+  { value: 75, color: "#ffffff" },
+  { value: 85, color: "#191919" },
+];
+
+function getMrmsProductLabel(product: MrmsField): string {
+  if (product === "rala") return "RALA";
+  if (product === "composite") return "Composite Reflectivity";
+  if (product === "etop18") return "18 dBZ Echo Tops";
+  if (product === "rotation240") return "4-hour Rotation Tracks";
+  return "MRMS";
+}
+
+function getMrmsProductUnit(product: MrmsField): string {
+  if (product === "etop18") return "kft";
+  if (product === "rotation240") return "1/s";
+  return "dBZ";
+}
+
+function makeReflectivityGradientCss() {
+  const min = -35;
+  const max = 85;
+  const span = max - min;
+  const stops = REFL_GRADIENT_BREAKS.map((s) => {
+    const pct = ((s.value - min) / span) * 100;
+    return `${s.color} ${pct}%`;
+  });
+  return `linear-gradient(to top, ${stops.join(", ")})`;
+}
+const WPC_LEGEND_ITEMS = [
+  { color: "#2563eb", label: "Cold Front" },
+  { color: "#dc2626", label: "Warm Front" },
+  { color: "#7c3aed", label: "Occluded Front" },
+  { color: "#a855f7", label: "Stationary Front" },
+  { color: "#b45309", label: "Dryline" },
+  { color: "#92400e", label: "Trough" },
+  { color: "#2563eb", label: "H (Pressure Center)" },
+  { color: "#dc2626", label: "L (Pressure Center)" },
+];
 
 const ADM0_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson";
@@ -524,6 +759,37 @@ function formatZulu(iso: string | null): string {
   return d.toISOString().slice(11, 16) + "Z";
 }
 
+function formatLocalDateTime(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes)) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+function formatUptime(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  const s = Math.max(0, Math.floor(seconds));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 function formatValidTimeLabel(iso: string | null, zone: DisplayTimeZone): string {
   if (!iso) return "---- UTC --- -- --- ----";
   const d = new Date(iso);
@@ -722,6 +988,271 @@ function drawWindVector(
   ctx.stroke();
 }
 
+type ScreenPoint = { x: number; y: number };
+type SamplePoint = { x: number; y: number; tx: number; ty: number };
+
+function flattenFeatureLineCoordinates(geometry: any): number[][][] {
+  if (!geometry || typeof geometry !== "object") return [];
+  if (geometry.type === "LineString" && Array.isArray(geometry.coordinates)) {
+    return [geometry.coordinates as number[][]];
+  }
+  if (geometry.type === "MultiLineString" && Array.isArray(geometry.coordinates)) {
+    return geometry.coordinates as number[][][];
+  }
+  return [];
+}
+
+function samplePolylineAtDistance(points: ScreenPoint[], distance: number): SamplePoint | null {
+  if (points.length < 2 || distance < 0) return null;
+  let traveled = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const segLen = Math.hypot(dx, dy);
+    if (segLen < 1e-6) continue;
+    if (traveled + segLen >= distance) {
+      const t = (distance - traveled) / segLen;
+      const x = a.x + dx * t;
+      const y = a.y + dy * t;
+      return { x, y, tx: dx / segLen, ty: dy / segLen };
+    }
+    traveled += segLen;
+  }
+  return null;
+}
+
+function polylineLength(points: ScreenPoint[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return total;
+}
+
+function drawFrontTriangle(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  tx: number,
+  ty: number,
+  nx: number,
+  ny: number,
+  size: number,
+  color: string
+) {
+  const apexX = x + nx * size * 1.15;
+  const apexY = y + ny * size * 1.15;
+  const baseCenterX = x - nx * size * 0.05;
+  const baseCenterY = y - ny * size * 0.05;
+  const halfBase = size * 0.85;
+  const p1x = baseCenterX + tx * halfBase;
+  const p1y = baseCenterY + ty * halfBase;
+  const p2x = baseCenterX - tx * halfBase;
+  const p2y = baseCenterY - ty * halfBase;
+
+  ctx.beginPath();
+  ctx.moveTo(apexX, apexY);
+  ctx.lineTo(p1x, p1y);
+  ctx.lineTo(p2x, p2y);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawFrontSemicircle(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  tx: number,
+  ty: number,
+  nx: number,
+  ny: number,
+  size: number,
+  color: string
+) {
+  const r = size * 0.72;
+  const cx = x + nx * r * 0.85;
+  const cy = y + ny * r * 0.85;
+  const ex1 = cx - tx * r;
+  const ey1 = cy - ty * r;
+  const ex2 = cx + tx * r;
+  const ey2 = cy + ty * r;
+  const c1x = cx + nx * r * 1.1 + tx * r * 0.55;
+  const c1y = cy + ny * r * 1.1 + ty * r * 0.55;
+  const c2x = cx + nx * r * 1.1 - tx * r * 0.55;
+  const c2y = cy + ny * r * 1.1 - ty * r * 0.55;
+
+  ctx.beginPath();
+  ctx.moveTo(ex1, ey1);
+  ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex2, ey2);
+  ctx.lineTo(ex1, ey1);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawDrylineScallop(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  tx: number,
+  ty: number,
+  nx: number,
+  ny: number,
+  size: number,
+  color: string
+) {
+  const r = size * 0.62;
+  const cx = x + nx * r * 0.8;
+  const cy = y + ny * r * 0.8;
+  const ex1 = cx - tx * r;
+  const ey1 = cy - ty * r;
+  const ex2 = cx + tx * r;
+  const ey2 = cy + ty * r;
+  const c1x = cx + nx * r * 1.05 + tx * r * 0.55;
+  const c1y = cy + ny * r * 1.05 + ty * r * 0.55;
+  const c2x = cx + nx * r * 1.05 - tx * r * 0.55;
+  const c2y = cy + ny * r * 1.05 - ty * r * 0.55;
+
+  ctx.beginPath();
+  ctx.moveTo(ex1, ey1);
+  ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex2, ey2);
+  ctx.strokeStyle = color;
+  ctx.stroke();
+}
+
+function hasReportedWeather(weatherCodes: string | null | undefined): boolean {
+  if (!weatherCodes) return false;
+  const tokens = weatherCodes
+    .toUpperCase()
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  return tokens.some((t) => t !== "M" && t !== "NULL" && t !== "NIL");
+}
+
+type WeatherSymbolSpec = {
+  metpyCode: number;
+  fallbackGlyph: string;
+  color: string;
+  priority: number;
+};
+
+// MetPy/WMO current weather code mapping (subset used for station weather mode).
+const METPY_WX_SYMBOL_TABLE: Record<string, WeatherSymbolSpec> = {
+  "FU": { metpyCode: 4, fallbackGlyph: "~", color: "#475569", priority: 1 },
+  "VA": { metpyCode: 4, fallbackGlyph: "~", color: "#475569", priority: 1 },
+  "HZ": { metpyCode: 5, fallbackGlyph: "oo", color: "#64748b", priority: 1 },
+  "DU": { metpyCode: 6, fallbackGlyph: "S", color: "#92400e", priority: 1 },
+  "SA": { metpyCode: 6, fallbackGlyph: "S", color: "#92400e", priority: 1 },
+  "PO": { metpyCode: 8, fallbackGlyph: "@", color: "#7c2d12", priority: 2 },
+  "VCSS": { metpyCode: 9, fallbackGlyph: "(SS)", color: "#92400e", priority: 1 },
+  "BR": { metpyCode: 10, fallbackGlyph: "=", color: "#64748b", priority: 1 },
+  "MIFG": { metpyCode: 11, fallbackGlyph: "=-", color: "#475569", priority: 2 },
+  "VCTS": { metpyCode: 13, fallbackGlyph: "VCTS", color: "#6d28d9", priority: 6 },
+  "VIRGA": { metpyCode: 14, fallbackGlyph: "VIR", color: "#0f766e", priority: 2 },
+  "VCSH": { metpyCode: 16, fallbackGlyph: "VCSH", color: "#0f766e", priority: 3 },
+  "TS": { metpyCode: 17, fallbackGlyph: "TS", color: "#6d28d9", priority: 8 },
+  "SQ": { metpyCode: 18, fallbackGlyph: "SQ", color: "#1e293b", priority: 5 },
+  "FC": { metpyCode: 19, fallbackGlyph: "FC", color: "#7f1d1d", priority: 8 },
+  "SS": { metpyCode: 30, fallbackGlyph: "SS", color: "#92400e", priority: 4 },
+  "+SS": { metpyCode: 31, fallbackGlyph: "SS+", color: "#7c2d12", priority: 5 },
+  "BLSN": { metpyCode: 38, fallbackGlyph: "BLSN", color: "#1d4ed8", priority: 5 },
+  "DRSN": { metpyCode: 39, fallbackGlyph: "DRSN", color: "#1d4ed8", priority: 5 },
+  "VCFG": { metpyCode: 40, fallbackGlyph: "VCFG", color: "#64748b", priority: 2 },
+  "BCFG": { metpyCode: 41, fallbackGlyph: "BCFG", color: "#64748b", priority: 2 },
+  "PRFG": { metpyCode: 44, fallbackGlyph: "PRFG", color: "#475569", priority: 2 },
+  "FG": { metpyCode: 45, fallbackGlyph: "==", color: "#64748b", priority: 2 },
+  "FZFG": { metpyCode: 49, fallbackGlyph: "FZFG", color: "#1d4ed8", priority: 3 },
+  "-DZ": { metpyCode: 51, fallbackGlyph: ",", color: "#0f766e", priority: 3 },
+  "DZ": { metpyCode: 53, fallbackGlyph: ",,", color: "#0f766e", priority: 3 },
+  "+DZ": { metpyCode: 55, fallbackGlyph: ",,,", color: "#0f766e", priority: 4 },
+  "-FZDZ": { metpyCode: 56, fallbackGlyph: "FZDZ", color: "#be185d", priority: 6 },
+  "FZDZ": { metpyCode: 57, fallbackGlyph: "FZDZ", color: "#be185d", priority: 6 },
+  "+FZDZ": { metpyCode: 57, fallbackGlyph: "FZDZ+", color: "#9d174d", priority: 7 },
+  "-DZRA": { metpyCode: 58, fallbackGlyph: "DZRA", color: "#0f766e", priority: 4 },
+  "DZRA": { metpyCode: 59, fallbackGlyph: "DZRA", color: "#0f766e", priority: 4 },
+  "-RA": { metpyCode: 61, fallbackGlyph: "\u2022", color: "#0f766e", priority: 4 },
+  "RA": { metpyCode: 63, fallbackGlyph: "\u2022\u2022", color: "#0f766e", priority: 4 },
+  "+RA": { metpyCode: 65, fallbackGlyph: "\u2022\u2022\u2022", color: "#0f766e", priority: 5 },
+  "-FZRA": { metpyCode: 66, fallbackGlyph: "FZRA", color: "#be185d", priority: 7 },
+  "FZRA": { metpyCode: 67, fallbackGlyph: "FZRA", color: "#be185d", priority: 7 },
+  "+FZRA": { metpyCode: 67, fallbackGlyph: "FZRA+", color: "#9d174d", priority: 8 },
+  "-RASN": { metpyCode: 68, fallbackGlyph: "RA/SN", color: "#2563eb", priority: 5 },
+  "RASN": { metpyCode: 69, fallbackGlyph: "RA/SN", color: "#2563eb", priority: 5 },
+  "-SN": { metpyCode: 71, fallbackGlyph: "*", color: "#2563eb", priority: 5 },
+  "SN": { metpyCode: 73, fallbackGlyph: "**", color: "#2563eb", priority: 5 },
+  "+SN": { metpyCode: 75, fallbackGlyph: "***", color: "#1d4ed8", priority: 6 },
+  "SG": { metpyCode: 77, fallbackGlyph: "SG", color: "#334155", priority: 4 },
+  "IC": { metpyCode: 78, fallbackGlyph: "IC", color: "#334155", priority: 4 },
+  "PE": { metpyCode: 79, fallbackGlyph: "PL", color: "#334155", priority: 5 },
+  "PL": { metpyCode: 79, fallbackGlyph: "PL", color: "#334155", priority: 5 },
+  "-SHRA": { metpyCode: 80, fallbackGlyph: "SHRA", color: "#0f766e", priority: 5 },
+  "SHRA": { metpyCode: 81, fallbackGlyph: "SHRA", color: "#0f766e", priority: 5 },
+  "+SHRA": { metpyCode: 81, fallbackGlyph: "SHRA+", color: "#0f766e", priority: 6 },
+  "-SHRASN": { metpyCode: 84, fallbackGlyph: "SHRASN", color: "#2563eb", priority: 6 },
+  "SHRASN": { metpyCode: 85, fallbackGlyph: "SHRASN", color: "#2563eb", priority: 6 },
+  "+SHRASN": { metpyCode: 85, fallbackGlyph: "SHRASN+", color: "#2563eb", priority: 7 },
+  "-SHSN": { metpyCode: 86, fallbackGlyph: "SHSN", color: "#2563eb", priority: 6 },
+  "SHSN": { metpyCode: 87, fallbackGlyph: "SHSN", color: "#2563eb", priority: 6 },
+  "+SHSN": { metpyCode: 87, fallbackGlyph: "SHSN+", color: "#1d4ed8", priority: 7 },
+  "-GR": { metpyCode: 88, fallbackGlyph: "GR", color: "#7c2d12", priority: 7 },
+  "GR": { metpyCode: 89, fallbackGlyph: "GR", color: "#7c2d12", priority: 7 },
+  "TSRA": { metpyCode: 95, fallbackGlyph: "TSRA", color: "#6d28d9", priority: 9 },
+  "TSGR": { metpyCode: 96, fallbackGlyph: "TSGR", color: "#6d28d9", priority: 10 },
+  "+TSRA": { metpyCode: 97, fallbackGlyph: "TSRA+", color: "#581c87", priority: 10 },
+};
+
+function weatherTokens(weatherCodes: string): string[] {
+  return weatherCodes
+    .toUpperCase()
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0 && t !== "M" && t !== "NULL" && t !== "NIL");
+}
+
+function canonicalWxToken(token: string): string {
+  let out = token.toUpperCase().trim();
+  if (out.startsWith("VC")) out = out.slice(2);
+  return out;
+}
+
+function weatherGlyphFromCodes(weatherCodes: string | null | undefined): { metpyCode: number; color: string; unknown: boolean } | null {
+  if (!hasReportedWeather(weatherCodes)) return null;
+  const tokens = weatherTokens(weatherCodes ?? "");
+  if (tokens.length === 0) return null;
+
+  let best: WeatherSymbolSpec | null = null;
+  let sawUnknown = false;
+  for (const rawToken of tokens) {
+    const token = canonicalWxToken(rawToken);
+    if (token === "UP") {
+      sawUnknown = true;
+      continue;
+    }
+    let spec = METPY_WX_SYMBOL_TABLE[token];
+    if (!spec) {
+      const unsigned = token.replace(/^[-+]/, "");
+      spec = METPY_WX_SYMBOL_TABLE[unsigned];
+    }
+    if (!spec) {
+      sawUnknown = true;
+      continue;
+    }
+    if (best == null || spec.priority > best.priority) best = spec;
+  }
+
+  if (best) return { metpyCode: best.metpyCode, color: best.color, unknown: false };
+  if (sawUnknown) return { metpyCode: -1, color: "#111827", unknown: true };
+  return null;
+}
+
 function App() {
   const [obs, setObs] = useState<SurfaceObs[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -755,10 +1286,12 @@ function App() {
   // Reference to the underlying MapLibre map instance
   const mapRef = useRef<MapRef | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const wpcFrontCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisLabelCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisGridRef = useRef<AnalysisGridStore>({});
   const animationFrameRef = useRef<number | null>(null);
+  const wpcFrontAnimationFrameRef = useRef<number | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursorProbe, setCursorProbe] = useState<{ x: number; y: number; lng: number; lat: number } | null>(null);
   const obsById = useMemo(() => {
@@ -867,17 +1400,74 @@ const densityPx = useMemo(() => {
 }, [densityMode]);
 
   // Load display mode preference from localStorage, default to dots
-  type DisplayMode = "plots" | "dots";
+  type DisplayMode = "plots" | "dots" | "weather";
 
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
     const saved = localStorage.getItem("displayMode");
-    return saved === "dots" || saved === "plots" ? (saved as DisplayMode) : "plots";
+    return saved === "dots" || saved === "plots" || saved === "weather" ? (saved as DisplayMode) : "plots";
   });
+  const [metpyWxGlyphMap, setMetpyWxGlyphMap] = useState<Record<number, string>>({});
+  const [metpyWxFontReady, setMetpyWxFontReady] = useState(false);
+  const [unknownWxSymbolCount, setUnknownWxSymbolCount] = useState(0);
   
   const setSurfaceObsMode = (mode: DisplayMode) => {
     setDisplayMode(mode);
     localStorage.setItem("displayMode", mode);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const styleId = "metpy-wx-font-style";
+    if (!document.getElementById(styleId)) {
+      const styleEl = document.createElement("style");
+      styleEl.id = styleId;
+      styleEl.textContent = `
+        @font-face {
+          font-family: "MetPyWxSymbols";
+          src: url("/api/metpy/wx_font") format("truetype");
+          font-display: swap;
+        }
+      `;
+      document.head.appendChild(styleEl);
+    }
+
+    const loadGlyphMap = async () => {
+      try {
+        const res = await fetch("/api/metpy/wx_symbol_map");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const raw = (data?.glyphs ?? {}) as Record<string, string>;
+        const parsed: Record<number, string> = {};
+        for (const [k, v] of Object.entries(raw)) {
+          const idx = Number(k);
+          if (Number.isFinite(idx) && typeof v === "string" && v.length > 0) {
+            parsed[idx] = v;
+          }
+        }
+        if (!cancelled) setMetpyWxGlyphMap(parsed);
+      } catch {
+        if (!cancelled) setMetpyWxGlyphMap({});
+      }
+    };
+
+    const loadFont = async () => {
+      try {
+        if ((document as any).fonts?.load) {
+          await (document as any).fonts.load(`24px "MetPyWxSymbols"`);
+          if (!cancelled) setMetpyWxFontReady(true);
+        }
+      } catch {
+        if (!cancelled) setMetpyWxFontReady(false);
+      }
+    };
+
+    loadGlyphMap();
+    loadFont();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Layer for displaying individual stations that are not part of a cluster
   const unclusteredLayer: any = {
@@ -910,7 +1500,10 @@ const densityPx = useMemo(() => {
 
   // GeoJSON data for the stations
   const stationsGeoJson = useMemo(() => {
-    const list = declutteredObs ?? [];
+    const list = (declutteredObs ?? []).filter((s) => {
+      if (displayMode !== "weather") return true;
+      return hasReportedWeather(s.weatherCodes);
+    });
     return {
       type: "FeatureCollection",
       features: list.map((s) => ({
@@ -919,7 +1512,7 @@ const densityPx = useMemo(() => {
         properties: { id: s.id, flightRule: s.flightRule },
       })),
     } as any;
-  }, [declutteredObs]);
+  }, [declutteredObs, displayMode]);
   
   // Load temperature unit preference from localStorage, default to Fahrenheit
   const [tempUnit, setTempUnit] = useState<TempUnit>(() => {
@@ -1030,6 +1623,10 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("includeLegendInExport");
     return saved === null ? false : saved === "true";
   });
+  const [legendsCollapsed, setLegendsCollapsed] = useState<boolean>(() => {
+    const saved = localStorage.getItem("legendsCollapsed");
+    return saved === "true";
+  });
 
   const [showCursorDiagnostics, setShowCursorDiagnostics] = useState<boolean>(() => {
     const saved = localStorage.getItem("cursorReadoutDiagnostics");
@@ -1039,6 +1636,30 @@ const densityPx = useMemo(() => {
   const [displayTimeZone, setDisplayTimeZone] = useState<DisplayTimeZone>(() => {
     const saved = localStorage.getItem("displayTimeZone");
     return saved === "LOCAL" || saved === "UTC" ? (saved as DisplayTimeZone) : "UTC";
+  });
+
+  const [mrmsField, setMrmsField] = useState<MrmsField>(() => {
+    const saved = localStorage.getItem("mrmsField");
+    return saved === "rala" || saved === "composite" || saved === "etop18" || saved === "rotation240"
+      ? (saved as MrmsField)
+      : "none";
+  });
+  const [mrmsMeta, setMrmsMeta] = useState<MrmsMetaResponse | null>(null);
+  const [mrmsError, setMrmsError] = useState<string | null>(null);
+  const [mrmsCursorValue, setMrmsCursorValue] = useState<number | null>(null);
+  const [nwsProduct, setNwsProduct] = useState<NwsProduct>(() => {
+    const saved = localStorage.getItem("nwsProduct");
+    return saved === "wpcSurface" ? "wpcSurface" : "none";
+  });
+  const [wpcSurface, setWpcSurface] = useState<WpcSurfaceResponse | null>(null);
+  const [wpcError, setWpcError] = useState<string | null>(null);
+  const [isOpsOpen, setIsOpsOpen] = useState(false);
+  const [opsSummary, setOpsSummary] = useState<OpsSummaryResponse | null>(null);
+  const [opsError, setOpsError] = useState<string | null>(null);
+  const [opsLoading, setOpsLoading] = useState(false);
+  const [frontRenderStyle, setFrontRenderStyle] = useState<FrontRenderStyle>(() => {
+    const saved = localStorage.getItem("frontRenderStyle");
+    return saved === "simple" || saved === "classic" ? saved : "classic";
   });
 
   const applyPresetView = useCallback((view: PresetView) => {
@@ -1154,9 +1775,9 @@ const densityPx = useMemo(() => {
   
   // Draw station plots on canvas overlay
   const drawStationPlots = useCallback(() => {
-    // Only draw if in plots mode
+    // Only draw if using a canvas-based station mode
     if (!showStations) return;
-    if (displayMode !== "plots") return;
+    if (displayMode !== "plots" && displayMode !== "weather") return;
     
     const canvas = canvasRef.current;
     const map = getMapOrNull(mapRef);
@@ -1184,6 +1805,7 @@ const densityPx = useMemo(() => {
 
     // Clear canvas
     ctx.clearRect(0, 0, width, height);
+    let unknownCount = 0;
 
     // Draw each station in declutteredObs
     for (const station of declutteredObs) {
@@ -1198,6 +1820,27 @@ const densityPx = useMemo(() => {
         const x = point.x;
         const y = point.y;
         const radius = zoom < 7.5 ? 6 : 8;
+
+        if (displayMode === "weather") {
+          const glyph = weatherGlyphFromCodes(station.weatherCodes);
+          if (!glyph) continue;
+          const symbolSize = zoom < 6 ? 18 : zoom < 8 ? 22 : 26;
+          const metpyGlyph = glyph.metpyCode >= 0 ? metpyWxGlyphMap[glyph.metpyCode] : undefined;
+          const useMetpyGlyph = Boolean(metpyGlyph && metpyWxFontReady);
+          const symbolText = useMetpyGlyph ? (metpyGlyph as string) : "?";
+          const fontFamily = useMetpyGlyph ? "MetPyWxSymbols" : "system-ui, sans-serif";
+          if (!useMetpyGlyph) unknownCount += 1;
+
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.font = `700 ${symbolSize}px ${fontFamily}`;
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = "rgba(255,255,255,0.92)";
+          ctx.strokeText(symbolText, x, y);
+          ctx.fillStyle = glyph.color;
+          ctx.fillText(symbolText, x, y);
+          continue;
+        }
 
         // Calculate sky cover fill fraction
         let maxFill = 0;
@@ -1275,7 +1918,14 @@ const densityPx = useMemo(() => {
         continue;
       }
     }
-  }, [declutteredObs, tempUnit, viewState, displayMode, showStations]);
+    setUnknownWxSymbolCount(unknownCount);
+  }, [declutteredObs, tempUnit, viewState, displayMode, showStations, metpyWxGlyphMap, metpyWxFontReady]);
+
+  useEffect(() => {
+    if (displayMode !== "weather") {
+      setUnknownWxSymbolCount(0);
+    }
+  }, [displayMode]);
 
   // Redraw canvas on map move/zoom/resize
   useEffect(() => {
@@ -1310,6 +1960,137 @@ const densityPx = useMemo(() => {
     };
   }, [drawStationPlots, mapLoaded]);
 
+  const drawClassicWpcFronts = useCallback(() => {
+    const canvas = wpcFrontCanvasRef.current;
+    const map = getMapOrNull(mapRef);
+    if (!canvas || !map) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    if (nwsProduct !== "wpcSurface" || frontRenderStyle !== "classic" || !wpcSurface) return;
+
+    const zoom = map.getZoom();
+    const spacing = zoom < 4.5 ? 56 : zoom < 6.5 ? 44 : zoom < 8.5 ? 34 : 28;
+    const symbolSize = zoom < 4.5 ? 7 : zoom < 6.5 ? 8.5 : zoom < 8.5 ? 10 : 11;
+    const lineWidth = zoom < 4.5 ? 2.0 : zoom < 7.5 ? 2.5 : 2.8;
+
+    const frontFeatures = wpcSurface.fronts?.features ?? [];
+    for (const feature of frontFeatures) {
+      const frontType = String(feature?.properties?.feature ?? "").toUpperCase();
+      const lineGroups = flattenFeatureLineCoordinates(feature?.geometry);
+      for (const line of lineGroups) {
+        if (!Array.isArray(line) || line.length < 2) continue;
+        const points: ScreenPoint[] = [];
+        for (const coord of line) {
+          if (!Array.isArray(coord) || coord.length < 2) continue;
+          const lon = Number(coord[0]);
+          const lat = Number(coord[1]);
+          if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+          const p = map.project([lon, lat]);
+          points.push({ x: p.x, y: p.y });
+        }
+        if (points.length < 2) continue;
+
+        let lineColor = "#334155";
+        let dashed = false;
+        switch (frontType) {
+          case "COLD":
+            lineColor = "#2563eb";
+            break;
+          case "WARM":
+            lineColor = "#dc2626";
+            break;
+          case "OCFNT":
+            lineColor = "#7c3aed";
+            break;
+          case "STNRY":
+            lineColor = "#a855f7";
+            dashed = true;
+            break;
+          case "DRYLINE":
+            lineColor = "#b45309";
+            dashed = true;
+            break;
+          case "TROF":
+            lineColor = "#92400e";
+            dashed = true;
+            break;
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = lineWidth;
+        ctx.setLineDash(dashed ? [7, 5] : []);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (frontType === "TROF") continue;
+        const length = polylineLength(points);
+        if (length < spacing) continue;
+        let idx = 0;
+        for (let d = spacing * 0.5; d < length - spacing * 0.35; d += spacing, idx++) {
+          const sample = samplePolylineAtDistance(points, d);
+          if (!sample) continue;
+          const nx = sample.ty;
+          const ny = -sample.tx;
+          if (frontType === "COLD") {
+            drawFrontTriangle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#2563eb");
+          } else if (frontType === "WARM") {
+            drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#dc2626");
+          } else if (frontType === "OCFNT") {
+            if (idx % 2 === 0) {
+              drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#7c3aed");
+            } else {
+              drawFrontTriangle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#7c3aed");
+            }
+          } else if (frontType === "STNRY") {
+            if (idx % 2 === 0) {
+              drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#dc2626");
+            } else {
+              drawFrontTriangle(ctx, sample.x, sample.y, sample.tx, sample.ty, -nx, -ny, symbolSize, "#2563eb");
+            }
+          } else if (frontType === "DRYLINE") {
+            drawDrylineScallop(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#b45309");
+          }
+        }
+      }
+    }
+  }, [nwsProduct, frontRenderStyle, wpcSurface]);
+
+  useEffect(() => {
+    if (!mapLoaded) return;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    const redraw = () => {
+      if (wpcFrontAnimationFrameRef.current) cancelAnimationFrame(wpcFrontAnimationFrameRef.current);
+      wpcFrontAnimationFrameRef.current = requestAnimationFrame(() => drawClassicWpcFronts());
+    };
+    map.on("move", redraw);
+    map.on("zoom", redraw);
+    map.on("resize", redraw);
+    redraw();
+    return () => {
+      map.off("move", redraw);
+      map.off("zoom", redraw);
+      map.off("resize", redraw);
+      if (wpcFrontAnimationFrameRef.current) cancelAnimationFrame(wpcFrontAnimationFrameRef.current);
+    };
+  }, [mapLoaded, drawClassicWpcFronts]);
+
   const mapStyle = useMemo(
     () => "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
     []
@@ -1328,7 +2109,9 @@ const densityPx = useMemo(() => {
   };
 
   const toggleDisplayMode = () => {
-    const newMode: DisplayMode = displayMode === "dots" ? "plots" : "dots";
+    const modeOrder: DisplayMode[] = ["plots", "dots", "weather"];
+    const idx = modeOrder.indexOf(displayMode);
+    const newMode = modeOrder[(idx + 1) % modeOrder.length];
     setDisplayMode(newMode);
     localStorage.setItem("displayMode", newMode);
   };
@@ -1651,6 +2434,14 @@ const densityPx = useMemo(() => {
 
   type LegendItem = { color: string; label: string };
   type LegendCard = { title: string; items: LegendItem[] };
+  const mrmsGradientLegend = useMemo(() => {
+    if (mrmsField !== "rala" && mrmsField !== "composite") return null;
+    return {
+      title: `MRMS ${getMrmsProductLabel(mrmsField)} (dBZ)`,
+      labels: ["85+", "75", "65", "50", "40", "20", "0", "-35"],
+      gradientCss: makeReflectivityGradientCss(),
+    };
+  }, [mrmsField]);
   const activeFillLegendCards = useMemo<LegendCard[]>(() => {
     const cards: LegendCard[] = [];
     if (analysisOverlays.windSpeedFill) {
@@ -1677,6 +2468,21 @@ const densityPx = useMemo(() => {
     if (derivedOverlays.deltaThetaE24h) {
       cards.push({ title: "24h Theta-e Change (K)", items: deltaThetaELegend });
     }
+    if (mrmsField === "etop18") {
+      cards.push({
+        title: `MRMS ${getMrmsProductLabel(mrmsField)} (${getMrmsProductUnit(mrmsField)})`,
+        items: ETOP18_LEGEND_ITEMS,
+      });
+    }
+    if (mrmsField === "rotation240") {
+      cards.push({
+        title: `MRMS ${getMrmsProductLabel(mrmsField)} (${getMrmsProductUnit(mrmsField)})`,
+        items: ROT240_LEGEND_ITEMS,
+      });
+    }
+    if (nwsProduct === "wpcSurface") {
+      cards.push({ title: "WPC Surface Analysis", items: WPC_LEGEND_ITEMS });
+    }
     return cards;
   }, [
     analysisOverlays.windSpeedFill,
@@ -1697,6 +2503,8 @@ const densityPx = useMemo(() => {
     deltaDewpointLegend,
     deltaThetaELegend,
     tempUnit,
+    mrmsField,
+    nwsProduct,
   ]);
 
   type ContourLegendItem = {
@@ -1864,6 +2672,13 @@ const densityPx = useMemo(() => {
         value: v == null ? "—" : `${v.toFixed(2)}${hidden ? " (hidden on map)" : ""}`,
       });
     }
+    if (mrmsField !== "none") {
+      const precision = mrmsField === "rotation240" ? 3 : 1;
+      rows.push({
+        label: `MRMS ${getMrmsProductLabel(mrmsField)} (${getMrmsProductUnit(mrmsField)})`,
+        value: mrmsCursorValue == null ? "—" : mrmsCursorValue.toFixed(precision),
+      });
+    }
 
     return rows;
   }, [
@@ -1873,6 +2688,8 @@ const densityPx = useMemo(() => {
     derivedOverlays,
     tempUnit,
     windUnit,
+    mrmsField,
+    mrmsCursorValue,
   ]);
 
   const activeFrameIso = useMemo(() => {
@@ -1923,7 +2740,312 @@ const densityPx = useMemo(() => {
     [activeFrameIso, displayTimeZone]
   );
 
+  const refreshMrmsMeta = useCallback(async () => {
+    if (mrmsField === "none") {
+      setMrmsMeta(null);
+      setMrmsError(null);
+      return;
+    }
+    const targetTime = activeFrameIso ?? new Date().toISOString();
+    try {
+      const res = await fetch(`/api/mrms/meta?product=${encodeURIComponent(mrmsField)}&time=${encodeURIComponent(targetTime)}`);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as MrmsMetaResponse;
+      setMrmsMeta(data);
+      setMrmsError(null);
+    } catch (e: any) {
+      setMrmsMeta(null);
+      setMrmsError(e?.message ?? "Failed to load MRMS metadata");
+    }
+  }, [mrmsField, activeFrameIso]);
+
+  useEffect(() => {
+    refreshMrmsMeta();
+  }, [refreshMrmsMeta]);
+
+  useEffect(() => {
+    if (!showCursorDiagnostics || mrmsField === "none" || !mrmsMeta || !cursorProbe) {
+      setMrmsCursorValue(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          product: mrmsField,
+          time: mrmsMeta.matched_time,
+          lat: cursorProbe.lat.toFixed(5),
+          lon: cursorProbe.lng.toFixed(5),
+        });
+        const res = await fetch(`/api/mrms/value?${params.toString()}`, { signal: controller.signal });
+        if (!res.ok) {
+          setMrmsCursorValue(null);
+          return;
+        }
+        const data = (await res.json()) as MrmsValueResponse;
+        const sampled = data.value != null ? data.value : data.value_dbz;
+        setMrmsCursorValue(sampled == null || !Number.isFinite(sampled) ? null : sampled);
+      } catch (e: any) {
+        if (e?.name !== "AbortError") setMrmsCursorValue(null);
+      }
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    showCursorDiagnostics,
+    mrmsField,
+    mrmsMeta,
+    cursorProbe?.lat,
+    cursorProbe?.lng,
+  ]);
+
+  const refreshWpcSurface = useCallback(async () => {
+    if (nwsProduct !== "wpcSurface") {
+      setWpcSurface(null);
+      setWpcError(null);
+      return;
+    }
+    try {
+      const res = await fetch("/api/nws/wpc_surface/latest");
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as WpcSurfaceResponse;
+      setWpcSurface(data);
+      setWpcError(null);
+    } catch (e: any) {
+      setWpcSurface(null);
+      setWpcError(e?.message ?? "Failed to load WPC surface analysis");
+    }
+  }, [nwsProduct]);
+
+  useEffect(() => {
+    refreshWpcSurface();
+    if (nwsProduct !== "wpcSurface") return;
+    const id = window.setInterval(refreshWpcSurface, 10 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [nwsProduct, refreshWpcSurface]);
+
+  const refreshOpsSummary = useCallback(async () => {
+    setOpsLoading(true);
+    try {
+      const res = await fetch("/api/ops/summary");
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as OpsSummaryResponse;
+      setOpsSummary(data);
+      setOpsError(null);
+    } catch (e: any) {
+      setOpsError(e?.message ?? "Failed to load API diagnostics");
+    } finally {
+      setOpsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpsOpen) return;
+    refreshOpsSummary();
+    const id = window.setInterval(refreshOpsSummary, 15000);
+    return () => window.clearInterval(id);
+  }, [isOpsOpen, refreshOpsSummary]);
+
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+
+  const mrmsTileTemplate = useMemo(() => {
+    if (mrmsField === "none" || !mrmsMeta) return null;
+    const base =
+      mrmsMeta.tile_url_template ??
+      `/api/mrms/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(mrmsField)}&time=${encodeURIComponent(
+        mrmsMeta.matched_time
+      )}`;
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}cb=${encodeURIComponent(mrmsMeta.matched_time)}`;
+  }, [mrmsField, mrmsMeta]);
+
+  const mrmsRasterLayer: any = useMemo(
+    () => ({
+      id: "mrms-raster-layer",
+      type: "raster",
+      source: "mrms-raster-tiles",
+      maxzoom: 10,
+      paint: {
+        "raster-opacity": 0.78,
+        "raster-resampling": "nearest",
+      },
+    }),
+    []
+  );
+
+  const wpcFrontBaseWidth: any = useMemo(
+    () => [
+      "interpolate",
+      ["linear"],
+      ["zoom"],
+      3, 2.2,
+      6, 2.6,
+      9, 3.0,
+    ],
+    []
+  );
+
+  const wpcFrontColdLayer: any = useMemo(
+    () => ({
+      id: "wpc-fronts-cold-layer",
+      type: "line",
+      source: "wpc-fronts",
+      filter: ["==", ["get", "feature"], "COLD"],
+      paint: {
+        "line-color": "#2563eb",
+        "line-width": wpcFrontBaseWidth,
+      },
+    }),
+    [wpcFrontBaseWidth]
+  );
+
+  const wpcFrontWarmLayer: any = useMemo(
+    () => ({
+      id: "wpc-fronts-warm-layer",
+      type: "line",
+      source: "wpc-fronts",
+      filter: ["==", ["get", "feature"], "WARM"],
+      paint: {
+        "line-color": "#dc2626",
+        "line-width": wpcFrontBaseWidth,
+      },
+    }),
+    [wpcFrontBaseWidth]
+  );
+
+  const wpcFrontOccludedLayer: any = useMemo(
+    () => ({
+      id: "wpc-fronts-occluded-layer",
+      type: "line",
+      source: "wpc-fronts",
+      filter: ["==", ["get", "feature"], "OCFNT"],
+      paint: {
+        "line-color": "#7c3aed",
+        "line-width": wpcFrontBaseWidth,
+      },
+    }),
+    [wpcFrontBaseWidth]
+  );
+
+  const wpcFrontStationaryLayer: any = useMemo(
+    () => ({
+      id: "wpc-fronts-stationary-layer",
+      type: "line",
+      source: "wpc-fronts",
+      filter: ["==", ["get", "feature"], "STNRY"],
+      paint: {
+        "line-color": "#a855f7",
+        "line-width": wpcFrontBaseWidth,
+        "line-dasharray": [5, 3],
+      },
+    }),
+    [wpcFrontBaseWidth]
+  );
+
+  const wpcFrontTroughLayer: any = useMemo(
+    () => ({
+      id: "wpc-fronts-trough-layer",
+      type: "line",
+      source: "wpc-fronts",
+      filter: ["==", ["get", "feature"], "TROF"],
+      paint: {
+        "line-color": "#92400e",
+        "line-width": wpcFrontBaseWidth,
+        "line-dasharray": [2, 2],
+      },
+    }),
+    [wpcFrontBaseWidth]
+  );
+
+  const wpcFrontDrylineLayer: any = useMemo(
+    () => ({
+      id: "wpc-fronts-dryline-layer",
+      type: "line",
+      source: "wpc-fronts",
+      filter: ["==", ["get", "feature"], "DRYLINE"],
+      paint: {
+        "line-color": "#b45309",
+        "line-width": wpcFrontBaseWidth,
+        "line-dasharray": [4, 4],
+      },
+    }),
+    [wpcFrontBaseWidth]
+  );
+
+  const wpcCenterLayer: any = useMemo(
+    () => ({
+      id: "wpc-centers-layer",
+      type: "symbol",
+      source: "wpc-centers",
+      layout: {
+        "text-field": [
+          "case",
+          ["==", ["get", "feature"], "HIGH"], "H",
+          ["==", ["get", "feature"], "LOW"], "L",
+          "",
+        ],
+        "text-size": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          3, 32,
+          8, 40,
+        ],
+        "text-font": ["Open Sans Bold"],
+        "text-allow-overlap": true,
+      },
+      paint: {
+        "text-color": [
+          "case",
+          ["==", ["get", "feature"], "HIGH"], "#2563eb",
+          ["==", ["get", "feature"], "LOW"], "#dc2626",
+          "#111827",
+        ],
+        "text-halo-color": "rgba(255,255,255,0.95)",
+        "text-halo-width": 1.2,
+      },
+    }),
+    []
+  );
+
+  const wpcCenterPressureLayer: any = useMemo(
+    () => ({
+      id: "wpc-centers-pressure-layer",
+      type: "symbol",
+      source: "wpc-centers",
+      layout: {
+        "text-field": [
+          "case",
+          ["!=", ["get", "strength"], null],
+          ["to-string", ["get", "strength"]],
+          "",
+        ],
+        "text-size": 11,
+        "text-font": ["Open Sans Semibold"],
+        "text-offset": [0.0, 1.35],
+        "text-allow-overlap": true,
+      },
+      paint: {
+        "text-color": "#111827",
+        "text-halo-color": "rgba(255,255,255,0.95)",
+        "text-halo-width": 1.0,
+      },
+    }),
+    []
+  );
 
   const [geographyOverlays, setGeographyOverlays] = useState<GeographyOverlaySet>(() => {
     const saved = localStorage.getItem("geographyOverlays");
@@ -3264,6 +4386,9 @@ const exportPng = useCallback(() => {
 
   // Overlay canvases (only draw if they exist / are mounted)
   const overlayCanvases: HTMLCanvasElement[] = [];
+  if (nwsProduct === "wpcSurface" && frontRenderStyle === "classic" && wpcFrontCanvasRef.current) {
+    overlayCanvases.push(wpcFrontCanvasRef.current);
+  }
   if (analysisCanvasRef.current) overlayCanvases.push(analysisCanvasRef.current);
   if (showStations && displayMode === "plots" && canvasRef.current) overlayCanvases.push(canvasRef.current);
   if (analysisLabelCanvasRef.current) overlayCanvases.push(analysisLabelCanvasRef.current);
@@ -3330,7 +4455,7 @@ const exportPng = useCallback(() => {
   }
 
   // 4) optional legend cards
-  if (includeLegendInExport) {
+  if (includeLegendInExport && !legendsCollapsed) {
     const dpr = window.devicePixelRatio || 1;
     const scale = dpr;
     const margin = 14 * scale;
@@ -3405,6 +4530,58 @@ const exportPng = useCallback(() => {
       }
     }
 
+    if (mrmsGradientLegend) {
+      const cardWidth = 172 * scale;
+      const cardHeight = 240 * scale;
+      const x = margin;
+      const y = height - margin - cardHeight - (activeFillLegendCards.length > 0 ? ((activeFillLegendCards.length + 0.2) * rowGap) : 0);
+
+      drawRoundRect(x, y, cardWidth, cardHeight, borderRadius);
+      ctx.fillStyle = "rgba(2, 6, 23, 0.84)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+      ctx.lineWidth = 1 * scale;
+      ctx.stroke();
+
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = `700 ${titleFontSize}px sans-serif`;
+      ctx.fillText(mrmsGradientLegend.title.toUpperCase(), x + padX, y + padY + titleH - 2 * scale);
+
+      const barX = x + padX;
+      const barY = y + padY + titleH + titleGap;
+      const barW = 18 * scale;
+      const barH = cardHeight - (padY * 2 + titleH + titleGap + 8 * scale);
+      const grad = ctx.createLinearGradient(0, barY + barH, 0, barY);
+      grad.addColorStop(0.0, "#ffffff");
+      grad.addColorStop((0 - (-35)) / 120, "#1e1e1e");
+      grad.addColorStop((0 - (-35)) / 120, "#004b82");
+      grad.addColorStop((20 - (-35)) / 120, "#8282fa");
+      grad.addColorStop((20 - (-35)) / 120, "#6eff6e");
+      grad.addColorStop((40 - (-35)) / 120, "#003c00");
+      grad.addColorStop((40 - (-35)) / 120, "#ffff6e");
+      grad.addColorStop((50 - (-35)) / 120, "#ff6e00");
+      grad.addColorStop((50 - (-35)) / 120, "#ff0000");
+      grad.addColorStop((65 - (-35)) / 120, "#5a0000");
+      grad.addColorStop((65 - (-35)) / 120, "#ffc8ff");
+      grad.addColorStop((75 - (-35)) / 120, "#5a005a");
+      grad.addColorStop((75 - (-35)) / 120, "#ffffff");
+      grad.addColorStop(1.0, "#191919");
+      ctx.fillStyle = grad;
+      drawRoundRect(barX, barY, barW, barH, 3 * scale);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.stroke();
+
+      const ticks = [85, 75, 65, 50, 40, 20, 0, -35];
+      ctx.font = `${fontSize}px sans-serif`;
+      ctx.fillStyle = "#e5e7eb";
+      for (const t of ticks) {
+        const p = (t - (-35)) / 120;
+        const yy = barY + barH - p * barH;
+        ctx.fillText(`${t}${t === 85 ? "+" : ""}`, barX + barW + 8 * scale, yy + 3 * scale);
+      }
+    }
+
     if (contourLegendItems.length > 0) {
       ctx.font = `600 ${titleFontSize}px sans-serif`;
       let maxTextWidth = Math.ceil(ctx.measureText("Contours").width);
@@ -3459,7 +4636,7 @@ const exportPng = useCallback(() => {
   a.href = dataUrl;
   a.download = `wx-mesoanalysis_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   a.click();
-}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems, validTimeLabel]);
+}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems, validTimeLabel, nwsProduct, frontRenderStyle, legendsCollapsed, mrmsGradientLegend]);
 
 useEffect(() => {
   localStorage.setItem("showStations", String(showStations));
@@ -3492,6 +4669,10 @@ useEffect(() => {
 }, [includeLegendInExport]);
 
 useEffect(() => {
+  localStorage.setItem("legendsCollapsed", String(legendsCollapsed));
+}, [legendsCollapsed]);
+
+useEffect(() => {
   localStorage.setItem("cursorReadoutDiagnostics", String(showCursorDiagnostics));
 }, [showCursorDiagnostics]);
 
@@ -3500,8 +4681,31 @@ useEffect(() => {
 }, [displayTimeZone]);
 
 useEffect(() => {
+  localStorage.setItem("mrmsField", mrmsField);
+}, [mrmsField]);
+
+useEffect(() => {
+  localStorage.setItem("nwsProduct", nwsProduct);
+}, [nwsProduct]);
+
+useEffect(() => {
+  localStorage.setItem("frontRenderStyle", frontRenderStyle);
+}, [frontRenderStyle]);
+
+useEffect(() => {
   if (!showCursorDiagnostics) setCursorProbe(null);
 }, [showCursorDiagnostics]);
+
+useEffect(() => {
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key.toLowerCase() !== "l") return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+    setLegendsCollapsed((v) => !v);
+  };
+  window.addEventListener("keydown", onKey);
+  return () => window.removeEventListener("keydown", onKey);
+}, []);
 
 useEffect(() => {
   localStorage.setItem("geographyOverlays", JSON.stringify(geographyOverlays));
@@ -3510,7 +4714,7 @@ useEffect(() => {
 useEffect(() => {
   if (!mapLoaded) return;
   if (!showStations) return;
-  if (displayMode !== "plots") return;
+  if (displayMode !== "plots" && displayMode !== "weather") return;
 
   // Canvas is mounted only when showStations && plots,
   // so schedule draw after React commits the DOM.
@@ -3532,8 +4736,8 @@ useEffect(() => {
     // analysis overlay
     if (anyAnalysisLikeOverlayOn) drawAnalysisOverlay();
 
-    // station plots
-    if (showStations && displayMode === "plots") drawStationPlots();
+    // station plots / weather glyphs
+    if (showStations && (displayMode === "plots" || displayMode === "weather")) drawStationPlots();
 
     // helps when toggling layers / mode quickly
     mapRef.current?.getMap()?.triggerRepaint?.();
@@ -3561,6 +4765,7 @@ useEffect(() => {
           </div>
           </header>
           <div className="header-controls">
+            <div className="header-row header-row-top">
             <div className="analysis-control">
               <div className="analysis-title">Objective Analysis</div>
               <details className="analysis-dropdown">
@@ -3723,6 +4928,85 @@ useEffect(() => {
                 </div>
               </details>
             </div>
+            <div className="analysis-control">
+              <div className="analysis-title">MRMS</div>
+              <details className="analysis-dropdown">
+                <summary>MRMS Fields</summary>
+                <div className="analysis-menu">
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "none"}
+                      onChange={() => setMrmsField("none")}
+                    />
+                    Off
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "rala"}
+                      onChange={() => setMrmsField("rala")}
+                    />
+                    RALA Reflectivity (dBZ)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "composite"}
+                      onChange={() => setMrmsField("composite")}
+                    />
+                    Composite Reflectivity (dBZ)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "etop18"}
+                      onChange={() => setMrmsField("etop18")}
+                    />
+                    18 dBZ Echo Tops (kft)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "rotation240"}
+                      onChange={() => setMrmsField("rotation240")}
+                    />
+                    4-hour Rotation Tracks (1/s)
+                  </label>
+                </div>
+              </details>
+            </div>
+            <div className="analysis-control">
+              <div className="analysis-title">NWS Products</div>
+              <details className="analysis-dropdown">
+                <summary>NWS Products</summary>
+                <div className="analysis-menu">
+                  <label>
+                    <input
+                      type="radio"
+                      name="nws-product"
+                      checked={nwsProduct === "none"}
+                      onChange={() => setNwsProduct("none")}
+                    />
+                    Off
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="nws-product"
+                      checked={nwsProduct === "wpcSurface"}
+                      onChange={() => setNwsProduct("wpcSurface")}
+                    />
+                    WPC Surface Analysis (Latest)
+                  </label>
+                </div>
+              </details>
+            </div>
             <div className="geography-control">
               <div className="geography-title">Geographies</div>
               <details className="geography-dropdown">
@@ -3814,6 +5098,8 @@ useEffect(() => {
                 </div>
               </details>
             </div>
+            </div>
+            <div className="header-row header-row-bottom">
             <div className="time-control">
               <div className="time-title">TIME</div>
               <div className="time-row">
@@ -3876,6 +5162,16 @@ useEffect(() => {
               </div>
             </div>
             <div className="header-actions">
+              <button
+                type="button"
+                className={`options-open-btn ${legendsCollapsed ? "active" : ""}`}
+                onClick={() => setLegendsCollapsed((v) => !v)}
+              >
+                {legendsCollapsed ? "Show Legends" : "Hide Legends"}
+              </button>
+              <button type="button" className="options-open-btn" onClick={() => setIsOpsOpen(true)}>
+                API Diagnostics
+              </button>
               <button type="button" className="options-open-btn" onClick={() => setIsOptionsOpen(true)}>
                 Open Options
               </button>
@@ -3883,11 +5179,49 @@ useEffect(() => {
                 Download View as PNG
               </button>
             </div>
+            </div>
           </div>
 
       <main className="app-main">
         <section className="map-panel">
           <div className="map-container">
+            {mrmsField !== "none" && mrmsMeta?.stale_warning && (
+              <div className="mrms-warning-overlay">
+                MRMS {getMrmsProductLabel(mrmsField)} warning: matched frame is {Math.round(mrmsMeta.age_minutes)} minutes old
+                ({mrmsMeta.matched_time ? formatZulu(mrmsMeta.matched_time) : "—"}).
+              </div>
+            )}
+            {mrmsField !== "none" && mrmsError && (
+              <div className="mrms-warning-overlay mrms-warning-error">
+                MRMS {getMrmsProductLabel(mrmsField)} unavailable: {mrmsError}
+              </div>
+            )}
+            {nwsProduct === "wpcSurface" && wpcSurface?.stale_warning && (
+              <div className="mrms-warning-overlay">
+                WPC surface analysis warning: latest parsed valid time is {wpcSurface.valid_time ? formatZulu(wpcSurface.valid_time) : "unknown"}
+                {typeof wpcSurface.age_minutes === "number" ? ` (${Math.round(wpcSurface.age_minutes)} min old)` : ""}.
+              </div>
+            )}
+            {nwsProduct === "wpcSurface" && wpcError && (
+              <div className="mrms-warning-overlay mrms-warning-error">
+                WPC surface analysis unavailable: {wpcError}
+              </div>
+            )}
+            {nwsProduct === "wpcSurface" && frontRenderStyle === "classic" && (
+              <canvas
+                ref={wpcFrontCanvasRef}
+                className="wpc-front-canvas"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                  zIndex: 14,
+                }}
+              />
+            )}
             {anyAnalysisLikeOverlayOn && (
               <canvas
                 ref={analysisCanvasRef}
@@ -3904,7 +5238,7 @@ useEffect(() => {
               />
             )}
 
-            {showStations && displayMode === "plots" && (
+            {showStations && (displayMode === "plots" || displayMode === "weather") && (
               <canvas
                 ref={canvasRef}
                 className="station-plot-canvas"
@@ -3936,7 +5270,7 @@ useEffect(() => {
               />
             )}
 
-            {activeFillLegendCards.length > 0 && (
+            {!legendsCollapsed && (activeFillLegendCards.length > 0 || Boolean(mrmsGradientLegend)) && (
               <div className="analysis-legends">
                 {activeFillLegendCards.map((card) => (
                   <div className="analysis-legend" key={`fill-legend-${card.title}`}>
@@ -3951,12 +5285,29 @@ useEffect(() => {
                     </ul>
                   </div>
                 ))}
+                {mrmsGradientLegend && (
+                <div className="analysis-legend">
+                  <div className="wind-fill-legend-title">{mrmsGradientLegend.title}</div>
+                  <div className="mrms-gradient-legend-body">
+                    <div className="mrms-gradient-bar" style={{ background: mrmsGradientLegend.gradientCss }} />
+                    <div className="mrms-gradient-labels">
+                      {mrmsGradientLegend.labels.map((lbl) => (
+                        <span key={`mrms-grad-${lbl}`}>{lbl}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                )}
               </div>
+            )}
+
+            {legendsCollapsed && (
+              <div className="legends-hidden-chip">Legends Hidden</div>
             )}
 
             <div className="valid-time-overlay">{validTimeLabel}</div>
 
-            {contourLegendItems.length > 0 && (
+            {!legendsCollapsed && contourLegendItems.length > 0 && (
               <div className="contour-legends">
                 <div className="analysis-legend">
                   <div className="wind-fill-legend-title">Contours</div>
@@ -3991,11 +5342,11 @@ useEffect(() => {
               maxZoom={12}
               mapStyle={mapStyle}
               attributionControl={true}
-              interactiveLayerIds={
-                showStations
-                  ? (displayMode === "plots" ? ["hit-targets"] : ["unclustered"])
+                  interactiveLayerIds={
+                    showStations
+                  ? (displayMode === "plots" || displayMode === "weather" ? ["hit-targets"] : ["unclustered"])
                   : []
-              }
+                  }
               onMouseMove={(e) => {
                 if (!showCursorDiagnostics) return;
                 setCursorProbe({
@@ -4014,7 +5365,7 @@ useEffect(() => {
                 const map = mapRef.current?.getMap();
                 if (!map) return;
 
-                const layers = displayMode === "plots" ? ["hit-targets"] : ["unclustered"];
+                const layers = displayMode === "plots" || displayMode === "weather" ? ["hit-targets"] : ["unclustered"];
                 const features = map.queryRenderedFeatures(e.point, { layers });
 
                 const f = features?.[0];
@@ -4035,6 +5386,35 @@ useEffect(() => {
               }}
             >
               <NavigationControl position="top-left" />
+              {mrmsField !== "none" && mrmsTileTemplate && (
+                <Source
+                  id="mrms-raster-tiles"
+                  key={mrmsTileTemplate}
+                  type="raster"
+                  tiles={[mrmsTileTemplate]}
+                  tileSize={256}
+                >
+                  <Layer {...mrmsRasterLayer} />
+                </Source>
+              )}
+              {nwsProduct === "wpcSurface" && wpcSurface && frontRenderStyle === "simple" && (
+                <>
+                  <Source id="wpc-fronts" type="geojson" data={wpcSurface.fronts}>
+                    <Layer {...wpcFrontColdLayer} />
+                    <Layer {...wpcFrontWarmLayer} />
+                    <Layer {...wpcFrontOccludedLayer} />
+                    <Layer {...wpcFrontStationaryLayer} />
+                    <Layer {...wpcFrontDrylineLayer} />
+                    <Layer {...wpcFrontTroughLayer} />
+                  </Source>
+                </>
+              )}
+              {nwsProduct === "wpcSurface" && wpcSurface && (
+                <Source id="wpc-centers" type="geojson" data={wpcSurface.centers}>
+                  <Layer {...wpcCenterLayer} />
+                  <Layer {...wpcCenterPressureLayer} />
+                </Source>
+              )}
               {geographyOverlays.adm0 && (
                 <Source id="adm0-boundaries" type="geojson" data={ADM0_BOUNDARIES_URL}>
                   <Layer {...adm0BoundaryLayer} />
@@ -4057,7 +5437,7 @@ useEffect(() => {
               )}
               <Source id="stations" type="geojson" data={stationsGeoJson}>
                 {displayMode === "dots" && <Layer {...unclusteredLayer} key="dots-layer" />}
-                {displayMode === "plots" && <Layer {...hitTargetsLayer} key="hit-layer" />}
+                {(displayMode === "plots" || displayMode === "weather") && <Layer {...hitTargetsLayer} key="hit-layer" />}
               </Source>
             </MapGL>
           </div>
@@ -4078,6 +5458,11 @@ useEffect(() => {
             ) : (
               <p className="station-count">
                 {visibleObs.length} of {obs.length} stations visible
+              </p>
+            )}
+            {displayMode === "weather" && (
+              <p className="station-count">
+                Unknown weather symbols: {unknownWxSymbolCount}
               </p>
             )}
           </div>
@@ -4334,6 +5719,195 @@ useEffect(() => {
         </aside>
       </main>
 
+      {isOpsOpen && (
+        <div className="options-overlay" onClick={() => setIsOpsOpen(false)}>
+          <div className="options-content ops-content" onClick={(e) => e.stopPropagation()}>
+            <div className="options-header">
+              <h3>API Diagnostics Dashboard</h3>
+              <div className="ops-actions">
+                <button className="control-btn" type="button" onClick={refreshOpsSummary}>
+                  Refresh
+                </button>
+                <button
+                  className="control-btn"
+                  type="button"
+                  onClick={() => {
+                    if (!opsSummary) return;
+                    navigator.clipboard?.writeText(JSON.stringify(opsSummary, null, 2)).catch(() => {});
+                  }}
+                >
+                  Copy JSON
+                </button>
+                <button
+                  className="options-close"
+                  onClick={() => setIsOpsOpen(false)}
+                  aria-label="Close diagnostics"
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <div className="options-body ops-body">
+              {opsLoading && <div className="ops-muted">Loading diagnostics...</div>}
+              {opsError && <div className="mrms-warning-overlay mrms-warning-error ops-inline-error">Diagnostics error: {opsError}</div>}
+              {!opsSummary ? (
+                <div className="ops-muted">No diagnostics data loaded yet.</div>
+              ) : (
+                <>
+                  <div className="ops-meta">
+                    <div>Generated (UTC): {formatLocalDateTime(opsSummary.generated_at)} / {formatZulu(opsSummary.generated_at)}</div>
+                    <div>Service start: {formatLocalDateTime(opsSummary.health.started_at)} / {formatZulu(opsSummary.health.started_at)}</div>
+                  </div>
+
+                  <div className="ops-cards">
+                    <div className="ops-card">
+                      <div className="ops-card-title">Status</div>
+                      <div className={`ops-status-pill ${opsSummary.health.status}`}>{opsSummary.health.status.toUpperCase()}</div>
+                    </div>
+                    <div className="ops-card">
+                      <div className="ops-card-title">Uptime</div>
+                      <div className="ops-card-value">{formatUptime(opsSummary.health.uptime_seconds)}</div>
+                    </div>
+                    <div className="ops-card">
+                      <div className="ops-card-title">Data Disk Usage</div>
+                      <div className="ops-card-value">{formatBytes(opsSummary.health.storage_total_bytes)}</div>
+                    </div>
+                    <div className="ops-card">
+                      <div className="ops-card-title">METAR Latest Age</div>
+                      <div className="ops-card-value">
+                        {opsSummary.freshness.metar.latest_age_minutes == null ? "—" : `${opsSummary.freshness.metar.latest_age_minutes} min`}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="ops-section">
+                    <div className="ops-section-title">Freshness</div>
+                    <div className="ops-table-wrap">
+                      <table className="ops-table">
+                        <thead>
+                          <tr>
+                            <th>Source</th>
+                            <th>Latest Time (UTC)</th>
+                            <th>Age</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>METAR</td>
+                            <td>{opsSummary.freshness.metar.latest_update ? formatZulu(opsSummary.freshness.metar.latest_update) : "—"}</td>
+                            <td>{opsSummary.freshness.metar.latest_age_minutes == null ? "—" : `${opsSummary.freshness.metar.latest_age_minutes} min`}</td>
+                            <td>OK</td>
+                            <td>{opsSummary.freshness.metar.latest_station_count} stations, {opsSummary.freshness.metar.snapshot_count} snapshots</td>
+                          </tr>
+                          <tr>
+                            <td>MRMS RALA</td>
+                            <td>{opsSummary.freshness.mrms.rala.latest_time ? formatZulu(opsSummary.freshness.mrms.rala.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.rala.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rala.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.rala.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.rala.available_count} times</td>
+                          </tr>
+                          <tr>
+                            <td>MRMS Composite</td>
+                            <td>{opsSummary.freshness.mrms.composite.latest_time ? formatZulu(opsSummary.freshness.mrms.composite.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.composite.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.composite.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.composite.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.composite.available_count} times</td>
+                          </tr>
+                          <tr>
+                            <td>MRMS EchoTop 18</td>
+                            <td>{opsSummary.freshness.mrms.etop18.latest_time ? formatZulu(opsSummary.freshness.mrms.etop18.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.etop18.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.etop18.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.etop18.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.etop18.available_count} times</td>
+                          </tr>
+                          <tr>
+                            <td>MRMS RotationTrack 240</td>
+                            <td>{opsSummary.freshness.mrms.rotation240.latest_time ? formatZulu(opsSummary.freshness.mrms.rotation240.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.rotation240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rotation240.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.rotation240.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.rotation240.available_count} times</td>
+                          </tr>
+                          <tr>
+                            <td>WPC Surface</td>
+                            <td>{opsSummary.freshness.wpc.valid_time ? formatZulu(opsSummary.freshness.wpc.valid_time) : "—"}</td>
+                            <td>{opsSummary.freshness.wpc.valid_age_minutes == null ? "—" : `${opsSummary.freshness.wpc.valid_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.wpc.status.toUpperCase()}</td>
+                            <td>
+                              {opsSummary.freshness.wpc.stale_warning ? `Overdue by ${opsSummary.freshness.wpc.overdue_by_minutes ?? "?"} min` : "On schedule"}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="ops-section">
+                    <div className="ops-section-title">Storage</div>
+                    <div className="ops-table-wrap">
+                      <table className="ops-table">
+                        <thead>
+                          <tr>
+                            <th>Component</th>
+                            <th>Size</th>
+                            <th>Files</th>
+                            <th>Newest</th>
+                            <th>Oldest</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(opsSummary.storage.components).map(([key, stats]) => (
+                            <tr key={`storage-${key}`}>
+                              <td>{key}</td>
+                              <td>{formatBytes(stats.bytes)}</td>
+                              <td>{stats.files}</td>
+                              <td>{stats.newest_mtime ? formatZulu(stats.newest_mtime) : "—"}</td>
+                              <td>{stats.oldest_mtime ? formatZulu(stats.oldest_mtime) : "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="ops-section">
+                    <div className="ops-section-title">Source Errors & Counters</div>
+                    <div className="ops-table-wrap">
+                      <table className="ops-table">
+                        <thead>
+                          <tr>
+                            <th>Source</th>
+                            <th>Success</th>
+                            <th>Failure</th>
+                            <th>Last Success</th>
+                            <th>Last Failure</th>
+                            <th>Last Error</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(opsSummary.errors.sources).map(([source, s]) => (
+                            <tr key={`err-${source}`}>
+                              <td>{source}</td>
+                              <td>{s.success}</td>
+                              <td>{s.failure}</td>
+                              <td>{s.last_success ? formatZulu(s.last_success) : "—"}</td>
+                              <td>{s.last_failure ? formatZulu(s.last_failure) : "—"}</td>
+                              <td className="ops-error-cell">{s.last_error ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {isOptionsOpen && (
         <div className="options-overlay" onClick={() => setIsOptionsOpen(false)}>
           <div className="options-content" onClick={(e) => e.stopPropagation()}>
@@ -4359,6 +5933,14 @@ useEffect(() => {
                   />
                   Show stations
                 </label>
+                <label className="options-check">
+                  <input
+                    type="checkbox"
+                    checked={legendsCollapsed}
+                    onChange={(e) => setLegendsCollapsed(e.target.checked)}
+                  />
+                  Collapse legends and colorbars
+                </label>
                 <label className="options-label">Obs Density</label>
                 <select
                   className="density-select"
@@ -4378,6 +5960,7 @@ useEffect(() => {
                 >
                   <option value="plots">Station Plots</option>
                   <option value="dots">Colored Flight Rule</option>
+                  <option value="weather">Weather Symbols Only</option>
                 </select>
               </div>
 
@@ -4443,6 +6026,27 @@ useEffect(() => {
                     onClick={() => setWindUnit("KPH")}
                   >
                     KPH
+                  </button>
+                </div>
+              </div>
+
+              <div className="options-section">
+                <div className="options-section-title">NWS Products</div>
+                <label className="options-label">WPC Front Render Style</label>
+                <div className="wind-unit-row">
+                  <button
+                    type="button"
+                    className={`control-btn ${frontRenderStyle === "simple" ? "active" : ""}`}
+                    onClick={() => setFrontRenderStyle("simple")}
+                  >
+                    Simple Lines
+                  </button>
+                  <button
+                    type="button"
+                    className={`control-btn ${frontRenderStyle === "classic" ? "active" : ""}`}
+                    onClick={() => setFrontRenderStyle("classic")}
+                  >
+                    Classic Front Symbols
                   </button>
                 </div>
               </div>
