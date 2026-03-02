@@ -1,136 +1,216 @@
 # Wx Mesoanalysis Dashboard
 
-A prototype web-based mesoanalysis dashboard for visualizing surface observations, station plots, and objective analysis fields (e.g., isotherms, isodrosotherms, and isobars).
+Prototype web-based mesoanalysis dashboard for surface observations, objective analysis, derived fields, MRMS overlays, and selected NWS products.
 
-The application consists of a **Python (FastAPI) backend** and a **JavaScript frontend**.
+The app has:
+- `backend/` FastAPI service (data ingest, history/cache, MRMS/WPC services, diagnostics APIs)
+- `frontend/` Vite + React + MapLibre client
 
----
+## Current Feature Set
+
+### Surface Observations
+- Time slider/looper (history mode)
+- Station display modes:
+  - `Station Plots`
+  - `Colored Flight Rule`
+  - `Weather Symbols Only`
+- Popup + sidebar observation details
+- QC flagging support (flagged obs still shown in obs details)
+
+### Objective Analysis
+- Isotherms
+- Isodrosotherms
+- Isobars
+- Objective wind
+- Filled analyses:
+  - Wind speed
+  - Ceiling (`<=050`)
+  - Visibility (`<=6SM`)
+  - Relative humidity (critical ranges)
+
+### Derived Fields
+- Mixing ratio
+- Moisture convergence
+- Theta-e
+- 24-hour change fields:
+  - SLP change
+  - Temperature change
+  - Dewpoint change
+  - Theta-e change
+
+### MRMS (single-select within MRMS menu)
+- RALA reflectivity
+- Composite reflectivity
+- 18 dBZ echo tops (kft)
+- 4-hour rotation tracks
+- MRMS cursor readout integration
+- Live stale-frame warning (>30 min old)
+- Tile-based rendering capped at zoom level 10
+
+### NWS Products
+- Latest WPC surface analysis
+- Front render options:
+  - Simple lines
+  - Classic front symbols
+
+### Geographies and Views
+- Geographic overlays:
+  - National boundaries (ADM0)
+  - State/province boundaries (ADM1)
+  - County/district boundaries (US counties)
+  - US ARTCC boundaries
+- Preset views:
+  - US regions
+  - US states/territories
+  - US ARTCCs
+
+### UI/Export/Diagnostics
+- Collapsible legends and colorbars
+- Optional legend inclusion in PNG export
+- Valid-time overlay saved into PNG export
+- API diagnostics dashboard (freshness, storage, errors, counters)
+- Cursor diagnostics panel (analysis/derived + MRMS value)
 
 ## Project Structure
 
-```
-project-root/
+```text
+WxAnalysis/
 ├── backend/
 │   ├── main.py
-│   ├── requirements.txt
-│   └── ...
-└── frontend/
-    ├── package.json
-    ├── src/
-    └── ...
+│   ├── mrms_service.py
+│   ├── wpc_service.py
+│   └── requirements.txt
+├── frontend/
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+└── data/
+    ├── mrms_cache/
+    └── snapshots.db
 ```
-
----
 
 ## Prerequisites
 
-- Python 3.9 or newer  
-- Node.js 18 or newer (Node 20 recommended)  
-- npm (included with Node.js)  
-- A Python virtual environment (venv, conda, etc.)
-
----
+- Python 3.9+
+- Node.js 18+ (Node 20 recommended)
+- npm
+- Virtual environment tool (`venv` or conda)
 
 ## Backend Setup (FastAPI)
 
-1. Open a terminal and navigate to the backend directory:
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
 
-   ```bash
-   cd backend
-   ```
+Backend base URL:
+- `http://localhost:8000`
 
-2. Activate the Python environment you want to use.
+### Backend Dependencies
 
-   Example (venv):
-   ```bash
-   source venv/bin/activate
-   ```
+From `backend/requirements.txt`:
+- `fastapi`
+- `uvicorn[standard]`
+- `pydantic`
+- `requests`
+- `metar`
+- `metpy`
+- `pandas`
+- `shapely`
+- `numpy`
+- `Pillow`
+- `pygrib`
 
-   Example (conda):
-   ```bash
-   conda activate your-env-name
-   ```
+Notes:
+- MRMS rendering requires `numpy`, `Pillow`, and `pygrib`.
+- Weather symbol font/glyph APIs require `metpy`.
 
-3. Install backend dependencies:
+## Frontend Setup (Vite/React)
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-4. Start the FastAPI development server:
+Frontend URL:
+- Usually `http://localhost:5173`
 
-   ```bash
-   uvicorn main:app --reload --port 8000
-   ```
+Build frontend:
 
-5. The backend API will be available at:
+```bash
+cd frontend
+npm run build
+```
 
-   ```
-   http://localhost:8000
-   ```
+## Run Workflow
 
----
+1. Start backend on `:8000`
+2. Start frontend on `:5173`
+3. Open app in browser
+4. If frontend appears stale after backend changes:
+   - Restart backend
+   - Hard refresh browser (`Cmd+Shift+R` on macOS)
 
-## Frontend Setup
+## Data Retention and Storage Caps
 
-1. Open a second terminal and navigate to the frontend directory:
+### MRMS cache (`data/mrms_cache`)
+- Hard size cap: **8 GB**
+- Cleanup interval: every **10 minutes**
+- Raw-file retention: **12 hours**
+- Oldest-first deletion when over cap
 
-   ```bash
-   cd frontend
-   ```
+### Snapshot history (`data/snapshots.db` and in-memory)
+- In-memory snapshot retention: **30 hours**
+- In-memory max snapshots: **2000**
+- SQLite time retention: **7 days**
+- SQLite hard cap: **2 GB**
+- If DB exceeds cap, oldest rows are pruned until below threshold
 
-2. Install frontend dependencies:
+## Key API Endpoints
 
-   ```bash
-   npm install
-   ```
+### Health/Diagnostics
+- `GET /api/health`
+- `GET /api/ops/health`
+- `GET /api/ops/freshness`
+- `GET /api/ops/storage`
+- `GET /api/ops/errors`
+- `GET /api/ops/summary`
 
-3. Start the frontend development server:
+### Surface Observations
+- `GET /api/obs/latest`
+- `GET /api/obs/times?minutes=...`
+- `GET /api/obs/at?time=...`
+- `POST /api/obs/refresh`
 
-   ```bash
-   npm run dev
-   ```
+### Geographies
+- `GET /api/geography/artcc`
 
-4. The frontend will typically be available at:
+### MRMS
+- `GET /api/mrms/times?product=...`
+- `GET /api/mrms/meta?product=...&time=...`
+- `GET /api/mrms/image?product=...&time=...`
+- `GET /api/mrms/tile/{z}/{x}/{y}.png?product=...&time=...`
+- `GET /api/mrms/value?product=...&time=...&lat=...&lon=...`
 
-   ```
-   http://localhost:5173
-   ```
+### NWS/MetPy support
+- `GET /api/nws/wpc_surface/latest`
+- `GET /api/metpy/wx_symbol_map`
+- `GET /api/metpy/wx_font`
 
-   (The exact port may vary depending on your setup.)
+## Operational Notes
 
----
-
-## Running the Application
-
-1. Ensure the backend is running on port 8000.
-2. Ensure the frontend dev server is running.
-3. Open the frontend URL in your browser.
-4. The frontend will communicate with the backend API to retrieve surface observation data and render the mesoanalysis visualizations.
-
----
-
-## Notes
-
-- This project is a prototype and intended for development and experimentation.
-- The `--reload` flag in uvicorn enables automatic reloading when backend code changes.
-- Frontend hot module reloading (HMR) is enabled by default when running `npm run dev`.
-
----
+- This is a research/prototype tool, not an operational warning or aviation decision system.
+- Live-data services are external dependencies (IEM, NOAA MRMS, WPC); outages or delays upstream can affect display.
+- MRMS and objective analysis can be displayed together.
 
 ## License
 
 MIT
 
----
 ## Disclaimer
-This project is provided for educational and research purposes only.
-It is not intended for operational, safety-critical, or decision-making use.
-The authors make no guarantees regarding accuracy, completeness, or availability.
 
----
-
-## Update history
-v0.2 -- Added objective analysis using surface METARs as underlying data.
-   v0.21 -- Time slider bar with observation history.
-v0.1 -- Initial build with flight rule dots and surface station models.
+Provided for educational and research purposes only. Not intended for operational, safety-critical, or decision-making use. No guarantees of accuracy, completeness, or availability.
