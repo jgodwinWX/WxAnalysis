@@ -1,3 +1,6 @@
+# About this project
+I will cut to the chase: most of this was written by Codex with review by me. My workflow is heavily focused on design and functionality in which I describe what I want in high detail to Codex then ask for recommendations, clarifications, and its plan for implementation before it edits a single line of code. I thoroughly review what it produces before putting anything into production. I am what one could consider an intermediate level coder, at least when it comes to backend design. For front-end coding, I would make a better quarterback for the Kansas City Chiefs than a front-end developer. AI coding has allowed me, a high-functioning amateur with a Louisiana public education to amass a great deal of knowledge that would have previously been impossible to obtain in today's busy work-life culture. This project is entirely a hobby of mine, and I can't totally say that I understand how every single piece works in great detail. Use at your own risk, but feel free to suggest changes and features.
+
 # Wx Mesoanalysis Dashboard
 
 Prototype web-based mesoanalysis dashboard for surface observations, objective analysis, derived fields, MRMS overlays, and selected NWS products.
