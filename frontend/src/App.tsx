@@ -35,12 +35,12 @@ type SurfaceObs = {
 type TempUnit = "F" | "C";
 type WindUnit = "KT" | "MPH" | "KPH";
 type DisplayTimeZone = "UTC" | "LOCAL";
-type MrmsField = "none" | "rala" | "composite" | "etop18" | "rotation240";
+type MrmsField = "none" | "rala" | "composite" | "etop18" | "rotationll240" | "rotationml240" | "posh" | "mesh240";
 type NwsProduct = "none" | "wpcSurface";
 type FrontRenderStyle = "simple" | "classic";
 
 type MrmsMetaResponse = {
-  product: "rala" | "composite" | "etop18" | "rotation240";
+  product: "rala" | "composite" | "etop18" | "rotationll240" | "rotationml240" | "posh" | "mesh240";
   requested_time: string | null;
   matched_time: string;
   latest_time: string;
@@ -59,7 +59,7 @@ type MrmsMetaResponse = {
 };
 
 type MrmsValueResponse = {
-  product: "rala" | "composite" | "etop18" | "rotation240";
+  product: "rala" | "composite" | "etop18" | "rotationll240" | "rotationml240" | "posh" | "mesh240";
   requested_time: string | null;
   matched_time: string;
   latest_time: string;
@@ -146,7 +146,28 @@ type OpsSummaryResponse = {
         available_count: number;
         last_error?: string | null;
       };
-      rotation240: {
+      rotationll240: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+      rotationml240: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+      posh: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+      mesh240: {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
@@ -256,6 +277,30 @@ const ROT240_LEGEND_ITEMS = [
   { color: "#b4bebe", label: "0.003-0.004 1/s" },
   { color: "#d2dcdc", label: "0.000-0.003 1/s" },
 ];
+const POSH_LEGEND_ITEMS = [
+  { color: "#dc0000", label: "90-100%" },
+  { color: "#c83c00", label: "80-90%" },
+  { color: "#e68200", label: "70-80%" },
+  { color: "#e6e600", label: "60-70%" },
+  { color: "#006e00", label: "50-60%" },
+  { color: "#00aa00", label: "40-50%" },
+  { color: "#00e600", label: "30-40%" },
+  { color: "#0000c8", label: "20-30%" },
+  { color: "#00b4c8", label: "10-20%" },
+  { color: "#00e6e6", label: "1-10%" },
+];
+const MESH240_LEGEND_ITEMS = [
+  { color: "#ffb4ff", label: ">4.00 in" },
+  { color: "#a000a0", label: "3.00–4.00 in" },
+  { color: "#c80000", label: "2.50–3.00 in" },
+  { color: "#dc5000", label: "2.00–2.50 in" },
+  { color: "#f09600", label: "1.75–2.00 in" },
+  { color: "#f0dc00", label: "1.50–1.75 in" },
+  { color: "#c8dc32", label: "1.25–1.50 in" },
+  { color: "#32aa32", label: "1.00–1.25 in" },
+  { color: "#64c864", label: "0.75–1.00 in" },
+  { color: "#b4dcb4", label: "0.50–0.75 in" },
+];
 const REFL_GRADIENT_BREAKS = [
   { value: -35, color: "#ffffff" },
   { value: 0, color: "#1e1e1e" },
@@ -277,13 +322,18 @@ function getMrmsProductLabel(product: MrmsField): string {
   if (product === "rala") return "RALA";
   if (product === "composite") return "Composite Reflectivity";
   if (product === "etop18") return "18 dBZ Echo Tops";
-  if (product === "rotation240") return "4-hour Rotation Tracks";
+  if (product === "rotationll240") return "4-Hour Low-Level Rotation Tracks";
+  if (product === "rotationml240") return "4-Hour Mid-Level Rotation Tracks";
+  if (product === "posh") return "Probability of Severe Hail (POSH)";
+  if (product === "mesh240") return "4-Hour Maximum Estimated Hail Size (MESH)";
   return "MRMS";
 }
 
 function getMrmsProductUnit(product: MrmsField): string {
   if (product === "etop18") return "kft";
-  if (product === "rotation240") return "1/s";
+  if (product === "rotationll240" || product === "rotationml240") return "1/s";
+  if (product === "posh") return "%";
+  if (product === "mesh240") return "in";
   return "dBZ";
 }
 
@@ -1074,27 +1124,50 @@ function drawFrontSemicircle(
   size: number,
   color: string
 ) {
+  // Rounded warm-front pip whose endpoints are anchored on the front line.
   const r = size * 0.72;
-  const cx = x + nx * r * 0.85;
-  const cy = y + ny * r * 0.85;
-  const ex1 = cx - tx * r;
-  const ey1 = cy - ty * r;
-  const ex2 = cx + tx * r;
-  const ey2 = cy + ty * r;
-  const c1x = cx + nx * r * 1.1 + tx * r * 0.55;
-  const c1y = cy + ny * r * 1.1 + ty * r * 0.55;
-  const c2x = cx + nx * r * 1.1 - tx * r * 0.55;
-  const c2y = cy + ny * r * 1.1 - ty * r * 0.55;
+  const ex1 = x - tx * r;
+  const ey1 = y - ty * r;
+  const ex2 = x + tx * r;
+  const ey2 = y + ty * r;
+  const cx = x + nx * r * 0.95;
+  const cy = y + ny * r * 0.95;
 
   ctx.beginPath();
   ctx.moveTo(ex1, ey1);
-  ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex2, ey2);
+  ctx.quadraticCurveTo(cx, cy, ex2, ey2);
   ctx.lineTo(ex1, ey1);
   ctx.closePath();
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
   ctx.fill();
   ctx.stroke();
+}
+
+function drawAlternatingStationaryFrontLine(
+  ctx: CanvasRenderingContext2D,
+  points: ScreenPoint[],
+  lineWidth: number,
+  zoom: number
+) {
+  // Solid red/blue alternating chunks along the same line.
+  const chunk = zoom < 5 ? 16 : zoom < 7 ? 20 : 24;
+
+  const drawPass = (color: string, offset: number) => {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash([chunk, chunk]);
+    ctx.lineDashOffset = offset;
+    ctx.stroke();
+  };
+
+  drawPass("#dc2626", 0);
+  drawPass("#2563eb", chunk);
+  ctx.setLineDash([]);
+  ctx.lineDashOffset = 0;
 }
 
 function drawDrylineScallop(
@@ -1640,7 +1713,14 @@ const densityPx = useMemo(() => {
 
   const [mrmsField, setMrmsField] = useState<MrmsField>(() => {
     const saved = localStorage.getItem("mrmsField");
-    return saved === "rala" || saved === "composite" || saved === "etop18" || saved === "rotation240"
+    if (saved === "rotation240") return "rotationll240";
+    return saved === "rala"
+      || saved === "composite"
+      || saved === "etop18"
+      || saved === "rotationll240"
+      || saved === "rotationml240"
+      || saved === "posh"
+      || saved === "mesh240"
       ? (saved as MrmsField)
       : "none";
   });
@@ -2016,8 +2096,7 @@ const densityPx = useMemo(() => {
             lineColor = "#7c3aed";
             break;
           case "STNRY":
-            lineColor = "#a855f7";
-            dashed = true;
+            lineColor = "#dc2626";
             break;
           case "DRYLINE":
             lineColor = "#b45309";
@@ -2029,20 +2108,25 @@ const densityPx = useMemo(() => {
             break;
         }
 
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-        ctx.strokeStyle = lineColor;
-        ctx.lineWidth = lineWidth;
-        ctx.setLineDash(dashed ? [7, 5] : []);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        if (frontType === "STNRY") {
+          drawAlternatingStationaryFrontLine(ctx, points, lineWidth, zoom);
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+          ctx.strokeStyle = lineColor;
+          ctx.lineWidth = lineWidth;
+          ctx.setLineDash(dashed ? [7, 5] : []);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
 
         if (frontType === "TROF") continue;
+        const symbolSpacing = frontType === "STNRY" ? spacing * 1.25 : spacing;
         const length = polylineLength(points);
-        if (length < spacing) continue;
+        if (length < symbolSpacing) continue;
         let idx = 0;
-        for (let d = spacing * 0.5; d < length - spacing * 0.35; d += spacing, idx++) {
+        for (let d = symbolSpacing * 0.5; d < length - symbolSpacing * 0.35; d += symbolSpacing, idx++) {
           const sample = samplePolylineAtDistance(points, d);
           if (!sample) continue;
           const nx = sample.ty;
@@ -2050,7 +2134,17 @@ const densityPx = useMemo(() => {
           if (frontType === "COLD") {
             drawFrontTriangle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#2563eb");
           } else if (frontType === "WARM") {
-            drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#dc2626");
+            drawFrontSemicircle(
+              ctx,
+              sample.x,
+              sample.y,
+              sample.tx,
+              sample.ty,
+              nx,
+              ny,
+              symbolSize * 1.5,
+              "#dc2626"
+            );
           } else if (frontType === "OCFNT") {
             if (idx % 2 === 0) {
               drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#7c3aed");
@@ -2059,9 +2153,29 @@ const densityPx = useMemo(() => {
             }
           } else if (frontType === "STNRY") {
             if (idx % 2 === 0) {
-              drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#dc2626");
+              drawFrontSemicircle(
+                ctx,
+                sample.x,
+                sample.y,
+                sample.tx,
+                sample.ty,
+                -nx,
+                -ny,
+                symbolSize * 1.25,
+                "#dc2626"
+              );
             } else {
-              drawFrontTriangle(ctx, sample.x, sample.y, sample.tx, sample.ty, -nx, -ny, symbolSize, "#2563eb");
+              drawFrontTriangle(
+                ctx,
+                sample.x,
+                sample.y,
+                sample.tx,
+                sample.ty,
+                nx,
+                ny,
+                symbolSize * 0.95,
+                "#2563eb"
+              );
             }
           } else if (frontType === "DRYLINE") {
             drawDrylineScallop(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#b45309");
@@ -2474,10 +2588,22 @@ const densityPx = useMemo(() => {
         items: ETOP18_LEGEND_ITEMS,
       });
     }
-    if (mrmsField === "rotation240") {
+    if (mrmsField === "rotationll240" || mrmsField === "rotationml240") {
       cards.push({
         title: `MRMS ${getMrmsProductLabel(mrmsField)} (${getMrmsProductUnit(mrmsField)})`,
         items: ROT240_LEGEND_ITEMS,
+      });
+    }
+    if (mrmsField === "posh") {
+      cards.push({
+        title: `MRMS ${getMrmsProductLabel(mrmsField)} (${getMrmsProductUnit(mrmsField)})`,
+        items: POSH_LEGEND_ITEMS,
+      });
+    }
+    if (mrmsField === "mesh240") {
+      cards.push({
+        title: `MRMS ${getMrmsProductLabel(mrmsField)} (${getMrmsProductUnit(mrmsField)})`,
+        items: MESH240_LEGEND_ITEMS,
       });
     }
     if (nwsProduct === "wpcSurface") {
@@ -2673,7 +2799,7 @@ const densityPx = useMemo(() => {
       });
     }
     if (mrmsField !== "none") {
-      const precision = mrmsField === "rotation240" ? 3 : 1;
+      const precision = (mrmsField === "rotationll240" || mrmsField === "rotationml240") ? 3 : 1;
       rows.push({
         label: `MRMS ${getMrmsProductLabel(mrmsField)} (${getMrmsProductUnit(mrmsField)})`,
         value: mrmsCursorValue == null ? "—" : mrmsCursorValue.toFixed(precision),
@@ -4973,10 +5099,37 @@ useEffect(() => {
                     <input
                       type="radio"
                       name="mrms-field"
-                      checked={mrmsField === "rotation240"}
-                      onChange={() => setMrmsField("rotation240")}
+                      checked={mrmsField === "rotationll240"}
+                      onChange={() => setMrmsField("rotationll240")}
                     />
-                    4-hour Rotation Tracks (1/s)
+                    4-Hour Low-Level Rotation Tracks (1/s)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "rotationml240"}
+                      onChange={() => setMrmsField("rotationml240")}
+                    />
+                    4-Hour Mid-Level Rotation Tracks (1/s)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "posh"}
+                      onChange={() => setMrmsField("posh")}
+                    />
+                    Probability of Severe Hail (POSH) (%)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mrms-field"
+                      checked={mrmsField === "mesh240"}
+                      onChange={() => setMrmsField("mesh240")}
+                    />
+                    4-Hour Maximum Estimated Hail Size (MESH) (in)
                   </label>
                 </div>
               </details>
@@ -5824,11 +5977,32 @@ useEffect(() => {
                             <td>{opsSummary.freshness.mrms.etop18.available_count} times</td>
                           </tr>
                           <tr>
-                            <td>MRMS RotationTrack 240</td>
-                            <td>{opsSummary.freshness.mrms.rotation240.latest_time ? formatZulu(opsSummary.freshness.mrms.rotation240.latest_time) : "—"}</td>
-                            <td>{opsSummary.freshness.mrms.rotation240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rotation240.latest_age_minutes} min`}</td>
-                            <td>{opsSummary.freshness.mrms.rotation240.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.rotation240.available_count} times</td>
+                            <td>MRMS RotationTrack LL 240</td>
+                            <td>{opsSummary.freshness.mrms.rotationll240.latest_time ? formatZulu(opsSummary.freshness.mrms.rotationll240.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.rotationll240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rotationll240.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.rotationll240.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.rotationll240.available_count} times</td>
+                          </tr>
+                          <tr>
+                            <td>MRMS RotationTrack ML 240</td>
+                            <td>{opsSummary.freshness.mrms.rotationml240.latest_time ? formatZulu(opsSummary.freshness.mrms.rotationml240.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.rotationml240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rotationml240.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.rotationml240.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.rotationml240.available_count} times</td>
+                          </tr>
+                          <tr>
+                            <td>MRMS POSH</td>
+                            <td>{opsSummary.freshness.mrms.posh.latest_time ? formatZulu(opsSummary.freshness.mrms.posh.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.posh.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.posh.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.posh.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.posh.available_count} times</td>
+                          </tr>
+                          <tr>
+                            <td>MRMS MESH 240min</td>
+                            <td>{opsSummary.freshness.mrms.mesh240.latest_time ? formatZulu(opsSummary.freshness.mrms.mesh240.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.mrms.mesh240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.mesh240.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.mrms.mesh240.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.mrms.mesh240.available_count} times</td>
                           </tr>
                           <tr>
                             <td>WPC Surface</td>

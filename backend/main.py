@@ -106,7 +106,8 @@ _diag_sources: Dict[str, Dict[str, Any]] = {
     "mrms:rala": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "mrms:composite": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "mrms:etop18": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
-    "mrms:rotation240": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
+    "mrms:rotationll240": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
+    "mrms:rotationml240": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
 }
 
 # Tune these:
@@ -718,7 +719,8 @@ def _ops_collect_storage() -> dict:
         "mrms_cache_rala": _scan_path_stats(_data_root / "mrms_cache" / "rala"),
         "mrms_cache_composite": _scan_path_stats(_data_root / "mrms_cache" / "composite"),
         "mrms_cache_etop18": _scan_path_stats(_data_root / "mrms_cache" / "etop18"),
-        "mrms_cache_rotation240": _scan_path_stats(_data_root / "mrms_cache" / "rotation240"),
+        "mrms_cache_rotationll240": _scan_path_stats(_data_root / "mrms_cache" / "rotationll240"),
+        "mrms_cache_rotationml240": _scan_path_stats(_data_root / "mrms_cache" / "rotationml240"),
     }
     return {"generated_at": _iso_z(datetime.now(timezone.utc)), "components": components}
 
@@ -813,7 +815,10 @@ def _ops_collect_freshness() -> dict:
             "rala": mrms_product_freshness("rala"),
             "composite": mrms_product_freshness("composite"),
             "etop18": mrms_product_freshness("etop18"),
-            "rotation240": mrms_product_freshness("rotation240"),
+            "rotationll240": mrms_product_freshness("rotationll240"),
+            "rotationml240": mrms_product_freshness("rotationml240"),
+            "posh": mrms_product_freshness("posh"),
+            "mesh240": mrms_product_freshness("mesh240"),
         },
         "wpc": wpc_latest,
     }

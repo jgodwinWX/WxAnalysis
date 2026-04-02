@@ -80,12 +80,30 @@ MRMS_PRODUCTS: Dict[str, MrmsProductConfig] = {
         bbox_conus=(-130.0, 20.0, -60.0, 55.0),
         latest_filename="MRMS_EchoTop_18.latest.grib2.gz",
     ),
-    "rotation240": MrmsProductConfig(
-        id="rotation240",
+    "rotationll240": MrmsProductConfig(
+        id="rotationll240",
         base_url="https://mrms.ncep.noaa.gov/2D/RotationTrack240min/",
         bbox_conus=(-130.0, 20.0, -60.0, 55.0),
         latest_filename="MRMS_RotationTrack240min.latest.grib2.gz",
-    )
+    ),
+    "rotationml240": MrmsProductConfig(
+        id="rotationml240",
+        base_url="https://mrms.ncep.noaa.gov/2D/RotationTrackML240min/",
+        bbox_conus=(-130.0, 20.0, -60.0, 55.0),
+        latest_filename="MRMS_RotationTrackML240min.latest.grib2.gz",
+    ),
+    "posh": MrmsProductConfig(
+        id="posh",
+        base_url="https://mrms.ncep.noaa.gov/2D/POSH/",
+        bbox_conus=(-130.0, 20.0, -60.0, 55.0),
+        latest_filename="MRMS_POSH.latest.grib2.gz",
+    ),
+    "mesh240": MrmsProductConfig(
+        id="mesh240",
+        base_url="https://mrms.ncep.noaa.gov/2D/MESH_Max_240min/",
+        bbox_conus=(-130.0, 20.0, -60.0, 55.0),
+        latest_filename="MRMS_MESH_Max_240min.latest.grib2.gz",
+    ),
 }
 
 # Reflectivity (RALA/Composite) GR2Analyst-style piecewise gradients with hard breaks.
@@ -140,11 +158,48 @@ ROT240_COLORS_RGB = [
     (255, 255, 255),  # 0.015-0.020
     (90, 230, 230),   # >=0.020
 ]
+# POSH (Probability of Severe Hail) color bins in % (0–100).
+# Values below 1% are masked as transparent (no hail signal).
+POSH_BIN_EDGES = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+POSH_COLORS_RGB = [
+    (0, 230, 230),    # 1–10%   cyan
+    (0, 180, 200),    # 10–20%  teal
+    (0, 0, 200),      # 20–30%  blue
+    (0, 230, 0),      # 30–40%  lime green
+    (0, 170, 0),      # 40–50%  green
+    (0, 110, 0),      # 50–60%  dark green
+    (230, 230, 0),    # 60–70%  yellow
+    (230, 130, 0),    # 70–80%  orange
+    (200, 60, 0),     # 80–90%  dark orange
+    (220, 0, 0),      # 90–100% red
+    (220, 0, 0),      # >=100%  red (clamp)
+]
+# MESH_Max_240min color bins in inches. Native GRIB2 units are mm; divide by 25.4.
+# Values below 0.5 in are masked transparent (noisy near-zero returns).
+# Index 0 is a placeholder — those values are always NaN after masking.
+MESH_MM_TO_IN = 1.0 / 25.4
+MESH240_BIN_EDGES_IN = [0.5, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50, 3.00, 4.00]
+MESH240_COLORS_RGB = [
+    (180, 220, 180),  # placeholder  (< 0.50 in, masked as NaN)
+    (180, 220, 180),  # 0.50–0.75 in – light green
+    (100, 200, 100),  # 0.75–1.00 in – green
+    ( 50, 170,  50),  # 1.00–1.25 in – dark green
+    (200, 220,  50),  # 1.25–1.50 in – yellow-green
+    (240, 220,   0),  # 1.50–1.75 in – yellow
+    (240, 150,   0),  # 1.75–2.00 in – orange  (golf ball = 1.75 in)
+    (220,  80,   0),  # 2.00–2.50 in – dark orange
+    (200,   0,   0),  # 2.50–3.00 in – red  (baseball = 2.75 in)
+    (160,   0, 160),  # 3.00–4.00 in – magenta
+    (255, 180, 255),  # >= 4.00 in   – light pink
+]
 MRMS_RENDER_VERSION_BY_PRODUCT = {
     "rala": 7,
     "composite": 7,
     "etop18": 7,
-    "rotation240": 2,
+    "rotationll240": 1,
+    "rotationml240": 1,
+    "posh": 1,
+    "mesh240": 1,
 }
 MRMS_TILE_MAX_ZOOM = 10
 MRMS_TILE_SIZE = 256
@@ -227,8 +282,12 @@ class MrmsService:
     def _style_for_product(product_id: str) -> Tuple[str, float]:
         if product_id == "etop18":
             return "discrete", 0.0
-        if product_id == "rotation240":
+        if product_id == "rotationll240" or product_id == "rotationml240":
             return "rotation240", 0.0
+        if product_id == "posh":
+            return "posh", 1.0
+        if product_id == "mesh240":
+            return "mesh240", 0.5
         return "reflectivity_piecewise", REFL_MIN_VALID
 
     def get_tile_png(
@@ -310,7 +369,7 @@ class MrmsService:
             "stale_warning": stale,
             "lat": float(lat),
             "lon": float(lon),
-            "unit": "kft" if cfg.id == "etop18" else ("1/s" if cfg.id == "rotation240" else "dBZ"),
+            "unit": "kft" if cfg.id == "etop18" else ("1/s" if cfg.id in {"rotationll240", "rotationml240"} else ("%" if cfg.id == "posh" else ("in" if cfg.id == "mesh240" else "dBZ"))),
             "value": value,
             "value_dbz": value,
         }
@@ -343,6 +402,8 @@ class MrmsService:
 
     def _product(self, product: str) -> MrmsProductConfig:
         key = (product or "").strip().lower()
+        if key == "rotation240":
+            key = "rotationll240"
         cfg = MRMS_PRODUCTS.get(key)
         if cfg is None:
             raise ValueError(f"Unsupported MRMS product '{product}'")
@@ -636,9 +697,12 @@ class MrmsService:
             arr[mask] = np.nan
         if cfg.id == "etop18":
             arr *= ETOP_KM_TO_KFT
-        elif cfg.id == "rotation240":
+        elif cfg.id in {"rotationll240", "rotationml240"}:
             # RotationTrack240min is encoded in x10^-3 s^-1; convert to 1/s.
             arr *= ROT240_RAW_TO_SI
+        elif cfg.id == "mesh240":
+            # MESH_Max_240min is encoded in mm; convert to inches.
+            arr *= MESH_MM_TO_IN
         _, min_valid = self._style_for_product(cfg.id)
         arr[arr < min_valid] = np.nan
 
@@ -743,6 +807,28 @@ class MrmsService:
                 rgba[m, 1] = g
                 rgba[m, 2] = b
                 rgba[m, 3] = 255
+        elif style_mode == "posh":
+            idx = np.digitize(sample, POSH_BIN_EDGES, right=False)
+            idx = np.clip(idx, 0, len(POSH_COLORS_RGB) - 1)
+            for i, (r, g, b) in enumerate(POSH_COLORS_RGB):
+                m = s_valid & (idx == i)
+                if not np.any(m):
+                    continue
+                rgba[m, 0] = r
+                rgba[m, 1] = g
+                rgba[m, 2] = b
+                rgba[m, 3] = 255
+        elif style_mode == "mesh240":
+            idx = np.digitize(sample, MESH240_BIN_EDGES_IN, right=False)
+            idx = np.clip(idx, 0, len(MESH240_COLORS_RGB) - 1)
+            for i, (r, g, b) in enumerate(MESH240_COLORS_RGB):
+                m = s_valid & (idx == i)
+                if not np.any(m):
+                    continue
+                rgba[m, 0] = r
+                rgba[m, 1] = g
+                rgba[m, 2] = b
+                rgba[m, 3] = 255
         else:
             idx = np.digitize(sample, ETOP18_BIN_EDGES_KFT, right=False)
             idx = np.clip(idx, 0, len(ETOP18_COLORS_RGB) - 1)
@@ -836,9 +922,12 @@ class MrmsService:
         lons = ((lons + 180.0) % 360.0) - 180.0
         if product_id == "etop18":
             arr *= ETOP_KM_TO_KFT
-        elif product_id == "rotation240":
+        elif product_id in {"rotationll240", "rotationml240"}:
             # RotationTrack240min is encoded in x10^-3 s^-1; convert to 1/s.
             arr *= ROT240_RAW_TO_SI
+        elif product_id == "mesh240":
+            # MESH_Max_240min is encoded in mm; convert to inches.
+            arr *= MESH_MM_TO_IN
 
         if np.ma.isMaskedArray(vals):
             mask = np.asarray(vals.mask, dtype=bool)
@@ -894,6 +983,28 @@ class MrmsService:
             idx = np.digitize(max_grid, ROT240_BIN_EDGES, right=False)
             idx = np.clip(idx, 0, len(ROT240_COLORS_RGB) - 1)
             for i, (r, g, b) in enumerate(ROT240_COLORS_RGB):
+                m = out_valid & (idx == i)
+                if not np.any(m):
+                    continue
+                rgba[m, 0] = r
+                rgba[m, 1] = g
+                rgba[m, 2] = b
+                rgba[m, 3] = 255
+        elif style_mode == "posh":
+            idx = np.digitize(max_grid, POSH_BIN_EDGES, right=False)
+            idx = np.clip(idx, 0, len(POSH_COLORS_RGB) - 1)
+            for i, (r, g, b) in enumerate(POSH_COLORS_RGB):
+                m = out_valid & (idx == i)
+                if not np.any(m):
+                    continue
+                rgba[m, 0] = r
+                rgba[m, 1] = g
+                rgba[m, 2] = b
+                rgba[m, 3] = 255
+        elif style_mode == "mesh240":
+            idx = np.digitize(max_grid, MESH240_BIN_EDGES_IN, right=False)
+            idx = np.clip(idx, 0, len(MESH240_COLORS_RGB) - 1)
+            for i, (r, g, b) in enumerate(MESH240_COLORS_RGB):
                 m = out_valid & (idx == i)
                 if not np.any(m):
                     continue

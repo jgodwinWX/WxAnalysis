@@ -45,7 +45,8 @@ The app has:
 - RALA reflectivity
 - Composite reflectivity
 - 18 dBZ echo tops (kft)
-- 4-hour rotation tracks
+- 4-hour low-level rotation tracks
+- 4-hour mid-level rotation tracks
 - MRMS cursor readout integration
 - Live stale-frame warning (>30 min old)
 - Tile-based rendering capped at zoom level 10
