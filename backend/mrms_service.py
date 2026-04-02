@@ -38,6 +38,31 @@ class MrmsFile:
 
 
 @dataclass(frozen=True)
+class MatchSelection:
+    matched: MrmsFile
+    latest: MrmsFile
+    requested_time: Optional[datetime]
+    match_status: str
+    match_delta_minutes: float
+    match_tolerance_minutes: Optional[int]
+
+
+def _bucket_match_tolerance_minutes(target: datetime, now: Optional[datetime] = None) -> int:
+    ref = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    age_minutes = max(0.0, (ref - target.astimezone(timezone.utc)).total_seconds() / 60.0)
+    return 10 if age_minutes <= 60.0 else 15
+
+
+def _match_status_from_delta_minutes(delta_minutes: float) -> str:
+    delta = abs(delta_minutes)
+    if delta <= 2.0:
+        return "exact"
+    if delta <= 5.0:
+        return "near"
+    return "approximate"
+
+
+@dataclass(frozen=True)
 class MrmsProductConfig:
     id: str
     base_url: str
@@ -235,7 +260,9 @@ class MrmsService:
         cfg = self._product(product)
         now = datetime.now(timezone.utc)
         files = self._recent_files(cfg, now)
-        matched, latest = self._select_match(cfg, files, requested_time)
+        selection = self._select_match(cfg, files, requested_time, now=now)
+        matched = selection.matched
+        latest = selection.latest
         age_min = (now - matched.valid_time).total_seconds() / 60.0
         stale = age_min > self.stale_warn_minutes
 
@@ -264,6 +291,9 @@ class MrmsService:
             "requested_time": _iso_z(requested_time) if requested_time else None,
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "match_status": selection.match_status,
+            "match_delta_minutes": selection.match_delta_minutes,
+            "match_tolerance_minutes": selection.match_tolerance_minutes,
             "age_minutes": round(age_min, 1),
             "stale_warning": stale,
             "available_times": [_iso_z(f.valid_time) for f in files],
@@ -316,7 +346,9 @@ class MrmsService:
         cfg = self._product(product)
         now = datetime.now(timezone.utc)
         files = self._recent_files(cfg, now)
-        matched, latest = self._select_match(cfg, files, requested_time)
+        selection = self._select_match(cfg, files, requested_time, now=now)
+        matched = selection.matched
+        latest = selection.latest
         frame = self._get_frame_data(cfg, matched)
 
         tile_path = self._tile_cache_path(cfg, matched, z, x, y, tile_size, max_zoom)
@@ -333,6 +365,9 @@ class MrmsService:
         return png_bytes, {
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "match_status": selection.match_status,
+            "match_delta_minutes": selection.match_delta_minutes,
+            "match_tolerance_minutes": selection.match_tolerance_minutes,
             "age_minutes": round(age_min, 1),
             "stale_warning": stale,
         }
@@ -353,7 +388,9 @@ class MrmsService:
         cfg = self._product(product)
         now = datetime.now(timezone.utc)
         files = self._recent_files(cfg, now)
-        matched, latest = self._select_match(cfg, files, requested_time)
+        selection = self._select_match(cfg, files, requested_time, now=now)
+        matched = selection.matched
+        latest = selection.latest
         frame = self._get_frame_data(cfg, matched)
 
         value = self._sample_frame_value(frame, lat, lon)
@@ -365,6 +402,9 @@ class MrmsService:
             "requested_time": _iso_z(requested_time) if requested_time else None,
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "match_status": selection.match_status,
+            "match_delta_minutes": selection.match_delta_minutes,
+            "match_tolerance_minutes": selection.match_tolerance_minutes,
             "age_minutes": round(age_min, 1),
             "stale_warning": stale,
             "lat": float(lat),
@@ -378,7 +418,9 @@ class MrmsService:
         cfg = self._product(product)
         now = datetime.now(timezone.utc)
         files = self._recent_files(cfg, now)
-        matched, latest = self._select_match(cfg, files, requested_time)
+        selection = self._select_match(cfg, files, requested_time, now=now)
+        matched = selection.matched
+        latest = selection.latest
         png_path = self._ensure_png(cfg, matched)
         age_min = (now - matched.valid_time).total_seconds() / 60.0
         stale = age_min > self.stale_warn_minutes
@@ -386,6 +428,9 @@ class MrmsService:
         return png_path, {
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "match_status": selection.match_status,
+            "match_delta_minutes": selection.match_delta_minutes,
+            "match_tolerance_minutes": selection.match_tolerance_minutes,
             "age_minutes": round(age_min, 1),
             "stale_warning": stale,
         }
@@ -420,19 +465,55 @@ class MrmsService:
             raise RuntimeError("No MRMS files available for selected product")
         return recent
 
-    def _select_match(self, cfg: MrmsProductConfig, files: List[MrmsFile], requested_time: Optional[datetime]) -> Tuple[MrmsFile, MrmsFile]:
+    def _select_match(
+        self,
+        cfg: MrmsProductConfig,
+        files: List[MrmsFile],
+        requested_time: Optional[datetime],
+        now: Optional[datetime] = None,
+    ) -> MatchSelection:
         latest = files[-1]
         if requested_time is None:
             latest_alias = self._latest_alias_file(cfg)
             if latest_alias is not None:
-                return latest_alias, latest_alias
-            return latest, latest
+                return MatchSelection(
+                    matched=latest_alias,
+                    latest=latest_alias,
+                    requested_time=None,
+                    match_status="latest",
+                    match_delta_minutes=0.0,
+                    match_tolerance_minutes=None,
+                )
+            return MatchSelection(
+                matched=latest,
+                latest=latest,
+                requested_time=None,
+                match_status="latest",
+                match_delta_minutes=0.0,
+                match_tolerance_minutes=None,
+            )
 
-        prior = [f for f in files if f.valid_time <= requested_time]
-        if prior:
-            return prior[-1], latest
-        # If target is earlier than oldest available in-window, return oldest available.
-        return files[0], latest
+        tolerance_minutes = _bucket_match_tolerance_minutes(requested_time, now=now)
+        matched = min(
+            files,
+            key=lambda f: (
+                abs((f.valid_time - requested_time).total_seconds()),
+                -f.valid_time.timestamp(),
+            ),
+        )
+        delta_minutes = round((matched.valid_time - requested_time).total_seconds() / 60.0, 1)
+        if abs(delta_minutes) > tolerance_minutes:
+            raise FileNotFoundError(
+                f"No MRMS {cfg.id} frame available within {tolerance_minutes} minutes of {_iso_z(requested_time)}"
+            )
+        return MatchSelection(
+            matched=matched,
+            latest=latest,
+            requested_time=requested_time,
+            match_status=_match_status_from_delta_minutes(delta_minutes),
+            match_delta_minutes=delta_minutes,
+            match_tolerance_minutes=tolerance_minutes,
+        )
 
     def _latest_alias_file(self, cfg: MrmsProductConfig) -> Optional[MrmsFile]:
         now = datetime.now(timezone.utc)

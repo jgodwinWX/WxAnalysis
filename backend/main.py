@@ -74,6 +74,9 @@ class ObsResponse(BaseModel):
 class ObsAtResponse(ObsResponse):
     requested_time: str
     snapshot_time: str
+    match_status: str
+    match_delta_minutes: float
+    match_tolerance_minutes: int
 
 # In-memory store for latest obs (will be replaced by DB later)
 _latest_obs: List[SurfaceObs] = []
@@ -118,6 +121,21 @@ SNAPSHOT_DB_RETENTION_HOURS = 7 * 24
 SNAPSHOT_DB_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB hard cap
 SNAPSHOT_NEAR_MATCH_MIN = 90
 ARTCC_CACHE_MINUTES = 12 * 60
+
+
+def _bucket_match_tolerance_minutes(target: datetime, now: Optional[datetime] = None) -> int:
+    ref = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    age_minutes = max(0.0, (ref - target.astimezone(timezone.utc)).total_seconds() / 60.0)
+    return 10 if age_minutes <= 60.0 else 15
+
+
+def _match_status_from_delta_minutes(delta_minutes: float) -> str:
+    delta = abs(delta_minutes)
+    if delta <= 2.0:
+        return "exact"
+    if delta <= 5.0:
+        return "near"
+    return "approximate"
 ARTCC_SOURCE_URLS = [
     "https://services5.arcgis.com/HDRa0B57OVrv2E1q/ArcGIS/rest/services/Airspace_Boundaries/FeatureServer/0/query?where=CLASS%20%3D%20%27ARTCC%27&outFields=IDENT,NAME,CLASS,LOCAL_TYPE&returnGeometry=true&f=geojson",
     "https://services5.arcgis.com/HDRa0B57OVrv2E1q/ArcGIS/rest/services/Airspace_Boundaries/FeatureServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson",
@@ -649,40 +667,47 @@ async def update_observations():
 
 async def periodic_update_task():
     """Background task that periodically fetches new observations."""
-    # Initial fetch on startup
-    await update_observations()
-    
-    # Then update every 5 minutes
     while True:
-        await asyncio.sleep(300)  # 5 minutes
         await update_observations()
+        await asyncio.sleep(300)  # 5 minutes
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup/shutdown tasks."""
-    _init_snapshot_db()
+async def warm_start_snapshot_history() -> None:
+    """Load recent snapshot history without blocking API startup."""
+    global _latest_obs, _last_update
     try:
-        history = _load_recent_snapshots_db()
+        history = await asyncio.to_thread(_load_recent_snapshots_db)
         if history:
             with _snapshot_lock:
                 _snapshot_history[:] = history
             latest = history[-1]
-            global _latest_obs, _last_update
             _latest_obs = latest.stations
             _last_update = latest.t
             logger.info(f"Loaded {len(history)} snapshots from disk")
     except Exception as e:
         logger.warning(f"Failed loading snapshot history from disk: {e}")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown tasks."""
+    await asyncio.to_thread(_init_snapshot_db)
+
     # Startup: start background task
+    snapshot_task = asyncio.create_task(warm_start_snapshot_history())
     task = asyncio.create_task(periodic_update_task())
+    logger.info("Started snapshot warm-start background task")
     logger.info("Started METAR update background task")
-    
+
     yield
     
     # Shutdown: cancel task
+    snapshot_task.cancel()
     task.cancel()
+    try:
+        await snapshot_task
+    except asyncio.CancelledError:
+        pass
     try:
         await task
     except asyncio.CancelledError:
@@ -888,19 +913,33 @@ def ops_summary() -> dict:
     }
 
 
-@app.get("/api/nws/wpc_surface/latest")
-def wpc_surface_latest() -> dict:
+@app.get("/api/nws/wpc_surface")
+def wpc_surface(time: Optional[str] = Query(default=None, description="Requested UTC ISO time")) -> dict:
     t0 = pytime.perf_counter()
     try:
-        out = _wpc_service.get_latest()
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure("wpc", ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        out = _wpc_service.get_for_time(target)
         _diag_mark_success("wpc", (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
         _diag_mark_failure("wpc", e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure("wpc", e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         _diag_mark_failure("wpc", e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to fetch WPC surface analysis: {e}")
+
+
+@app.get("/api/nws/wpc_surface/latest")
+def wpc_surface_latest() -> dict:
+    return wpc_surface(time=None)
 
 
 @app.get("/api/metpy/wx_symbol_map")
@@ -956,6 +995,8 @@ def obs_at(time: str = Query(..., description="UTC ISO time, e.g. 2025-12-24T18:
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
+    tolerance_minutes = _bucket_match_tolerance_minutes(target)
+
     with _snapshot_lock:
         if not _snapshot_history:
             snap = None
@@ -964,7 +1005,7 @@ def obs_at(time: str = Query(..., description="UTC ISO time, e.g. 2025-12-24T18:
             snap = min(_snapshot_history, key=lambda s: abs((s.t - target).total_seconds()))
             best_diff_min = abs((snap.t - target).total_seconds()) / 60.0
 
-    if snap is None or (best_diff_min is not None and best_diff_min > SNAPSHOT_NEAR_MATCH_MIN):
+    if snap is None or (best_diff_min is not None and best_diff_min > tolerance_minutes):
         try:
             archive_stations = _fetch_archive_snapshot_near(target)
             if archive_stations:
@@ -975,6 +1016,7 @@ def obs_at(time: str = Query(..., description="UTC ISO time, e.g. 2025-12-24T18:
                     _iso_z(target),
                     len(archive_stations),
                 )
+                best_diff_min = 0.0
             elif snap is None:
                 raise HTTPException(status_code=404, detail="No snapshots available yet")
         except HTTPException:
@@ -984,9 +1026,22 @@ def obs_at(time: str = Query(..., description="UTC ISO time, e.g. 2025-12-24T18:
                 raise HTTPException(status_code=503, detail=f"Historical backfill failed: {e}")
             logger.warning("Historical backfill failed for %s: %s", _iso_z(target), e)
 
+    if snap is None:
+        raise HTTPException(status_code=404, detail="No snapshots available yet")
+
+    delta_minutes = round((snap.t - target).total_seconds() / 60.0, 1)
+    if abs(delta_minutes) > tolerance_minutes:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No observations available within {tolerance_minutes} minutes of {_iso_z(target)}",
+        )
+
     return ObsAtResponse(
         requested_time=_iso_z(target),
         snapshot_time=_iso_z(snap.t),
+        match_status=_match_status_from_delta_minutes(delta_minutes),
+        match_delta_minutes=delta_minutes,
+        match_tolerance_minutes=tolerance_minutes,
         generated_at=snap.t,
         stations=snap.stations,
     )
@@ -1057,6 +1112,9 @@ def mrms_meta(
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to fetch MRMS metadata: {e}")
@@ -1080,6 +1138,9 @@ def mrms_image(
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to render MRMS image: {e}")
@@ -1124,6 +1185,9 @@ def mrms_tile(
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to render MRMS tile: {e}")
@@ -1168,6 +1232,9 @@ def mrms_value(
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to sample MRMS value: {e}")

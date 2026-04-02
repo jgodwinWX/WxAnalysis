@@ -47,6 +47,7 @@ class WpcSurfaceService:
         cycle_hours: int = 3,
         issue_delay_minutes: int = 75,
         overdue_grace_minutes: int = 30,
+        history_retention_hours: int = 24,
     ) -> None:
         self.source_url = source_url
         self.request_timeout_sec = request_timeout_sec
@@ -54,8 +55,10 @@ class WpcSurfaceService:
         self.cycle_hours = cycle_hours
         self.issue_delay_minutes = issue_delay_minutes
         self.overdue_grace_minutes = overdue_grace_minutes
+        self.history_retention = timedelta(hours=history_retention_hours)
         self._lock = threading.Lock()
         self._cache: Optional[WpcCacheEntry] = None
+        self._history: Dict[str, Dict[str, Any]] = {}
 
     def get_latest(self) -> Dict[str, Any]:
         if parse_wpc_surface_bulletin is None or pd is None:
@@ -75,7 +78,62 @@ class WpcSurfaceService:
 
         with self._lock:
             self._cache = WpcCacheEntry(fetched_at=now, payload=payload)
+            self._store_history_entry(payload, now)
         return payload
+
+    def get_for_time(self, requested_time: Optional[datetime]) -> Dict[str, Any]:
+        latest = self.get_latest()
+        if requested_time is None:
+            return self._decorate_payload(
+                latest,
+                requested_time=None,
+                matched_time=latest.get("valid_time"),
+                match_delta_minutes=0.0,
+                match_status="latest",
+                match_tolerance_minutes=None,
+            )
+
+        target = requested_time.astimezone(timezone.utc).replace(microsecond=0)
+        tolerance_minutes = self._bucket_match_tolerance_minutes(target)
+        history = self.get_timeseries()
+        if not history:
+            raise FileNotFoundError("No WPC surface analysis history available")
+
+        def sort_key(payload: Dict[str, Any]) -> Any:
+            valid_iso = payload.get("valid_time")
+            valid_dt = self._parse_iso_time(valid_iso)
+            if valid_dt is None:
+                return (float("inf"), 0.0)
+            diff_seconds = abs((valid_dt - target).total_seconds())
+            return (diff_seconds, -valid_dt.timestamp())
+
+        matched = min(history, key=sort_key)
+        matched_time = self._parse_iso_time(matched.get("valid_time"))
+        if matched_time is None:
+            raise FileNotFoundError("No WPC surface analysis valid time available")
+        delta_minutes = round((matched_time - target).total_seconds() / 60.0, 1)
+        if abs(delta_minutes) > tolerance_minutes:
+            raise FileNotFoundError(
+                f"No WPC surface analysis available within {tolerance_minutes} minutes of {_iso_z(target)}"
+            )
+        return self._decorate_payload(
+            matched,
+            requested_time=target,
+            matched_time=matched.get("valid_time"),
+            match_delta_minutes=delta_minutes,
+            match_status=self._match_status_from_delta(delta_minutes),
+            match_tolerance_minutes=tolerance_minutes,
+        )
+
+    def get_timeseries(self) -> List[Dict[str, Any]]:
+        self.get_latest()
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            self._prune_history(now)
+            return sorted(
+                self._history.values(),
+                key=lambda payload: self._parse_iso_time(payload.get("valid_time")) or datetime.min.replace(tzinfo=timezone.utc),
+            )
 
     def _fetch_bulletin_text(self) -> str:
         resp = requests.get(
@@ -85,6 +143,66 @@ class WpcSurfaceService:
         )
         resp.raise_for_status()
         return resp.text
+
+    def _store_history_entry(self, payload: Dict[str, Any], now: datetime) -> None:
+        valid_time = payload.get("valid_time")
+        if valid_time:
+            self._history[str(valid_time)] = payload
+        self._prune_history(now)
+
+    def _prune_history(self, now: datetime) -> None:
+        cutoff = now - self.history_retention
+        stale_keys = [
+            key
+            for key, payload in self._history.items()
+            if (self._parse_iso_time(payload.get("valid_time")) or now) < cutoff
+        ]
+        for key in stale_keys:
+            self._history.pop(key, None)
+
+    @staticmethod
+    def _parse_iso_time(value: Any) -> Optional[datetime]:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).replace(microsecond=0)
+
+    @staticmethod
+    def _bucket_match_tolerance_minutes(target: datetime, now: Optional[datetime] = None) -> int:
+        ref = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        age_minutes = max(0.0, (ref - target.astimezone(timezone.utc)).total_seconds() / 60.0)
+        return 10 if age_minutes <= 60.0 else 15
+
+    @staticmethod
+    def _match_status_from_delta(delta_minutes: float) -> str:
+        delta = abs(delta_minutes)
+        if delta <= 2.0:
+            return "exact"
+        if delta <= 5.0:
+            return "near"
+        return "approximate"
+
+    @staticmethod
+    def _decorate_payload(
+        payload: Dict[str, Any],
+        requested_time: Optional[datetime],
+        matched_time: Optional[str],
+        match_delta_minutes: float,
+        match_status: str,
+        match_tolerance_minutes: Optional[int],
+    ) -> Dict[str, Any]:
+        out = dict(payload)
+        out["requested_time"] = _iso_z(requested_time) if requested_time else None
+        out["matched_time"] = matched_time
+        out["match_delta_minutes"] = match_delta_minutes
+        out["match_status"] = match_status
+        out["match_tolerance_minutes"] = match_tolerance_minutes
+        return out
 
     def _build_payload(self, df: "pd.DataFrame", fetched_at: datetime) -> Dict[str, Any]:
         expected_cycle = self._expected_cycle_valid_time(fetched_at)

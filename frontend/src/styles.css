@@ -861,11 +861,7 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  width: 260px;
-}
-
-.time-slider {
-  width: 100%;
+  width: min(700px, 100%);
 }
 
 .time-title {
@@ -883,6 +879,28 @@
   flex-wrap: wrap;
 }
 
+.time-bucket-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.time-bucket-btn {
+  background: rgba(15, 23, 42, 0.82);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  padding: 0.32rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.time-bucket-btn.active {
+  background: rgba(30, 64, 175, 0.42);
+  border-color: rgba(96, 165, 250, 0.82);
+  color: #eff6ff;
+}
+
 .time-mode {
   display: inline-flex;
   align-items: center;
@@ -895,6 +913,32 @@
   font-size: 0.82rem;
   color: #cbd5e1;
   font-variant-numeric: tabular-nums;
+}
+
+.data-status-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.data-status-item {
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 0.83rem;
+  line-height: 1.35;
+  color: #dbeafe;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.data-status-item strong {
+  color: #f8fafc;
+}
+
+.data-status-item.dropped {
+  background: rgba(69, 10, 10, 0.55);
+  border-color: rgba(248, 113, 113, 0.32);
+  color: #fecaca;
 }
 
 .time-mode-readout {

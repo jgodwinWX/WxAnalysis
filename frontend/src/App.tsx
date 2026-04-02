@@ -35,15 +35,37 @@ type SurfaceObs = {
 type TempUnit = "F" | "C";
 type WindUnit = "KT" | "MPH" | "KPH";
 type DisplayTimeZone = "UTC" | "LOCAL";
+type TimeBucketId =
+  | "minus_360m"
+  | "minus_300m"
+  | "minus_240m"
+  | "minus_180m"
+  | "minus_120m"
+  | "minus_60m"
+  | "minus_45m"
+  | "minus_30m"
+  | "minus_15m"
+  | "latest";
 type MrmsField = "none" | "rala" | "composite" | "etop18" | "rotationll240" | "rotationml240" | "posh" | "mesh240";
 type NwsProduct = "none" | "wpcSurface";
 type FrontRenderStyle = "simple" | "classic";
+
+type TimeMatchMeta = {
+  requested_time: string | null;
+  matched_time: string;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
+};
 
 type MrmsMetaResponse = {
   product: "rala" | "composite" | "etop18" | "rotationll240" | "rotationml240" | "posh" | "mesh240";
   requested_time: string | null;
   matched_time: string;
   latest_time: string;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
   age_minutes: number;
   stale_warning: boolean;
   available_times: string[];
@@ -63,6 +85,9 @@ type MrmsValueResponse = {
   requested_time: string | null;
   matched_time: string;
   latest_time: string;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
   age_minutes: number;
   stale_warning: boolean;
   lat: number;
@@ -81,6 +106,11 @@ type WpcSurfaceResponse = {
   product: "wpc_surface";
   source_url: string;
   fetched_at: string;
+  requested_time?: string | null;
+  matched_time?: string | null;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
   valid_time: string | null;
   age_minutes: number | null;
   stale_warning: boolean;
@@ -91,6 +121,23 @@ type WpcSurfaceResponse = {
     centers: number;
   };
   front_types_present?: string[];
+};
+
+type ObsSnapshotResponse = {
+  generated_at: string;
+  stations: SurfaceObs[];
+  requested_time: string;
+  snapshot_time: string;
+  match_status: string;
+  match_delta_minutes: number;
+  match_tolerance_minutes: number;
+};
+
+type DataLayerStatus = {
+  key: string;
+  label: string;
+  state: "matched" | "dropped";
+  detail: string;
 };
 
 type OpsSourceStats = {
@@ -365,8 +412,19 @@ const ADM1_BOUNDARIES_URL =
 const ADM2_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json";
 const ARTCC_BOUNDARIES_URL = "/api/geography/artcc";
-const HISTORY_WINDOW_MINUTES = 360;
 const CHANGE_WINDOW_HOURS = 24;
+const TIME_BUCKETS: Array<{ id: TimeBucketId; label: string; minutesAgo: number | null }> = [
+  { id: "minus_360m", label: "6h", minutesAgo: 360 },
+  { id: "minus_300m", label: "5h", minutesAgo: 300 },
+  { id: "minus_240m", label: "4h", minutesAgo: 240 },
+  { id: "minus_180m", label: "3h", minutesAgo: 180 },
+  { id: "minus_120m", label: "2h", minutesAgo: 120 },
+  { id: "minus_60m", label: "1h", minutesAgo: 60 },
+  { id: "minus_45m", label: "45m", minutesAgo: 45 },
+  { id: "minus_30m", label: "30m", minutesAgo: 30 },
+  { id: "minus_15m", label: "15m", minutesAgo: 15 },
+  { id: "latest", label: "Latest", minutesAgo: null },
+];
 
 const DELTA_SLP_NEG_CUTS = [-16, -12, -8, -4];
 const DELTA_SLP_POS_CUTS = [4, 8, 12, 16];
@@ -809,6 +867,18 @@ function formatZulu(iso: string | null): string {
   return d.toISOString().slice(11, 16) + "Z";
 }
 
+function formatTimestampWithSeconds(iso: string | null, zone: DisplayTimeZone): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  if (zone === "UTC") return d.toISOString().slice(11, 19) + "Z";
+  const timePart = d.toLocaleTimeString([], { hour12: false });
+  const tzPart = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+    .formatToParts(d)
+    .find((p) => p.type === "timeZoneName")?.value;
+  return tzPart ? `${timePart} ${tzPart}` : timePart;
+}
+
 function formatLocalDateTime(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -868,6 +938,31 @@ function formatValidTimeLabel(iso: string | null, zone: DisplayTimeZone): string
   const tz = tzPart && tzPart.trim() ? tzPart.trim() : "LOCAL";
 
   return `${hh}${mm} ${tz} ${dow} ${day} ${mon} ${year}`;
+}
+
+function getTimeBucketById(id: TimeBucketId) {
+  return TIME_BUCKETS.find((bucket) => bucket.id === id) ?? TIME_BUCKETS[TIME_BUCKETS.length - 1];
+}
+
+function describeMatchDetail(
+  meta: TimeMatchMeta,
+  zone: DisplayTimeZone,
+  latestLabel = "Showing latest available data"
+): string {
+  if (!meta.requested_time || meta.match_status === "latest") {
+    return `${latestLabel} (product time: ${formatTimestampWithSeconds(meta.matched_time, zone)}).`;
+  }
+  const delta = meta.match_delta_minutes;
+  if (typeof delta !== "number" || !Number.isFinite(delta)) {
+    return `Showing matched frame (product time: ${formatTimestampWithSeconds(meta.matched_time, zone)}).`;
+  }
+  if (Math.abs(delta) < 0.05) {
+    return `Matched target exactly (product time: ${formatTimestampWithSeconds(meta.matched_time, zone)}).`;
+  }
+  const rounded = Math.abs(Math.round(delta));
+  const tense = delta > 0 ? "late" : "early";
+  const minuteLabel = rounded === 1 ? "minute" : "minutes";
+  return `Matched ${rounded} ${minuteLabel} ${tense} (product time: ${formatTimestampWithSeconds(meta.matched_time, zone)}).`;
 }
 
 // Format the sky conditions as "CLR///" or "SCT015"
@@ -1338,10 +1433,12 @@ function App() {
     pitch: 0,
     padding: { top: 0, left: 0, bottom: 0, right: 0 },
   });
-  type TimelineMode = "live" | "history";
-  const timelineMode: TimelineMode = "history";
-  const [availableTimes, setAvailableTimes] = useState<string[]>([]);
-  const [timeIndex, setTimeIndex] = useState<number>(-1);
+  const [selectedTimeBucket, setSelectedTimeBucket] = useState<TimeBucketId>(() => {
+    const saved = localStorage.getItem("selectedTimeBucket");
+    return TIME_BUCKETS.some((bucket) => bucket.id === saved) ? (saved as TimeBucketId) : "latest";
+  });
+  const [currentTimeTick, setCurrentTimeTick] = useState<number>(() => Date.now());
+  const [obsMatchMeta, setObsMatchMeta] = useState<TimeMatchMeta | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [playSpeedMs, setPlaySpeedMs] = useState<number>(600);
@@ -1598,70 +1695,67 @@ const densityPx = useMemo(() => {
     return saved === "MPH" || saved === "KPH" || saved === "KT" ? saved : "KT";
   });
 
-  const fetchObservations = async () => {
-    try {
-      const res = await fetch("/api/obs/latest");
-      const data = await res.json();
-      setObs(data.stations ?? []);
-      setLastUpdate(data.generated_at);
-      setIsLoading(false);
-    } catch (err) {
-      console.error("Failed to fetch observations:", err);
-      setIsLoading(false);
-    }
-  };
+  const selectedBucket = useMemo(() => getTimeBucketById(selectedTimeBucket), [selectedTimeBucket]);
+  const requestedTimeIso = useMemo(() => {
+    if (selectedBucket.minutesAgo == null) return null;
+    return new Date(currentTimeTick - selectedBucket.minutesAgo * 60_000).toISOString();
+  }, [currentTimeTick, selectedBucket]);
 
-  const fetchAvailableTimes = useCallback(async (minutes = HISTORY_WINDOW_MINUTES) => {
-    try {
-      const res = await fetch(`/api/obs/times?minutes=${minutes}`);
-      const data = await res.json();
-      const rawTimes: string[] = Array.isArray(data.times) ? data.times : [];
-      const cutoffMs = Date.now() - HISTORY_WINDOW_MINUTES * 60_000;
-      const filteredTimes = rawTimes.filter((t) => {
-        const ms = new Date(t).getTime();
-        return Number.isFinite(ms) ? ms >= cutoffMs : true;
-      });
-      const times = filteredTimes;
-      setAvailableTimes(times);
-      // default to latest if we haven't chosen yet
-      if (times.length > 0) setTimeIndex(times.length - 1);
-    } catch (e) {
-      console.error("Failed to fetch available times:", e);
-      setAvailableTimes([]);
-      setTimeIndex(-1);
-    }
-  }, []);
-  
-  const fetchObsAtTime = useCallback(async (iso: string) => {
-    // cache hit
-    const cached = obsCacheRef.current.get(iso);
-    if (cached) {
-      setObs(cached);
-      setLastUpdate(iso);
-      setIsLoading(false);
-      return;
-    }
-  
-    // cancel any inflight request (fast scrubbing)
+  const fetchObservations = useCallback(async (requestedIso: string | null) => {
     inflightRef.current?.abort();
     const ac = new AbortController();
     inflightRef.current = ac;
-  
+
     try {
-      const res = await fetch(`/api/obs/at?time=${encodeURIComponent(iso)}`, {
+      if (requestedIso === null) {
+        const res = await fetch("/api/obs/latest", { signal: ac.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const stations: SurfaceObs[] = data.stations ?? [];
+        const generatedAt = data.generated_at ?? null;
+        if (generatedAt) obsCacheRef.current.set(generatedAt, stations);
+        setObs(stations);
+        setLastUpdate(generatedAt);
+        setObsMatchMeta(
+          generatedAt
+            ? {
+                requested_time: null,
+                matched_time: generatedAt,
+                match_status: "latest",
+                match_delta_minutes: 0,
+                match_tolerance_minutes: null,
+              }
+            : null
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      const res = await fetch(`/api/obs/at?time=${encodeURIComponent(requestedIso)}`, {
         signal: ac.signal,
       });
-      const data = await res.json();
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as ObsSnapshotResponse;
       const stations: SurfaceObs[] = data.stations ?? [];
-      obsCacheRef.current.set(iso, stations);
-  
+      obsCacheRef.current.set(data.snapshot_time ?? requestedIso, stations);
       setObs(stations);
-      // use returned time if you prefer: data.generated_at or data.snapshot_time
-      setLastUpdate(data.generated_at ?? iso);
+      setLastUpdate(data.snapshot_time ?? data.generated_at ?? requestedIso);
+      setObsMatchMeta({
+        requested_time: data.requested_time,
+        matched_time: data.snapshot_time,
+        match_status: data.match_status,
+        match_delta_minutes: data.match_delta_minutes,
+        match_tolerance_minutes: data.match_tolerance_minutes,
+      });
       setIsLoading(false);
     } catch (e: any) {
       if (e?.name === "AbortError") return;
-      console.error("Failed to fetch obs at time:", e);
+      console.error("Failed to fetch observations:", e);
+      setObs([]);
+      setObsMatchMeta(null);
       setIsLoading(false);
     }
   }, []);
@@ -1671,9 +1765,10 @@ const densityPx = useMemo(() => {
     if (cached) return cached;
     try {
       const res = await fetch(`/api/obs/at?time=${encodeURIComponent(iso)}`);
-      const data = await res.json();
+      if (!res.ok) return [];
+      const data = (await res.json()) as ObsSnapshotResponse;
       const stations: SurfaceObs[] = data.stations ?? [];
-      obsCacheRef.current.set(iso, stations);
+      obsCacheRef.current.set(data.snapshot_time ?? iso, stations);
       return stations;
     } catch (e) {
       console.error("Failed to fetch snapshot for delta:", e);
@@ -1763,45 +1858,31 @@ const densityPx = useMemo(() => {
   }, []);
 
   useEffect(() => {
-    // Always drive the UI from history snapshots / slider frames.
-    fetchAvailableTimes(HISTORY_WINDOW_MINUTES);
-    const interval = setInterval(() => fetchAvailableTimes(HISTORY_WINDOW_MINUTES), 300000);
-    return () => clearInterval(interval);
-  }, [fetchAvailableTimes]);
+    fetchObservations(requestedTimeIso);
+  }, [fetchObservations, requestedTimeIso]);
 
   useEffect(() => {
-    if (timelineMode !== "history") return;
-    if (timeIndex < 0) return;
-    if (timeIndex >= availableTimes.length) return;
-  
-    const t = availableTimes[timeIndex];
-    if (!t) return;
-  
-    fetchObsAtTime(t);
-  }, [timelineMode, timeIndex, availableTimes, fetchObsAtTime]);
+    const id = window.setInterval(() => setCurrentTimeTick(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
-    if (timelineMode !== "history") return;
     if (!isPlaying) return;
-    if (availableTimes.length < 2) return;
-    if (timeIndex < 0) return; // wait until we have a valid index
-  
-    const lastIdx = availableTimes.length - 1;
-    const isLastFrame = timeIndex >= lastIdx;
-  
-    // Hold the last frame for 2x the selected speed
-    const delay = isLastFrame ? playSpeedMs * 2 : playSpeedMs;
-  
+    const currentIndex = TIME_BUCKETS.findIndex((bucket) => bucket.id === selectedTimeBucket);
+    if (currentIndex < 0) return;
+    const isLatestBucket = currentIndex >= TIME_BUCKETS.length - 1;
+    const delay = isLatestBucket ? playSpeedMs * 2 : playSpeedMs;
+
     const id = window.setTimeout(() => {
-      setTimeIndex((prev) => {
-        const last = availableTimes.length - 1;
-        if (prev >= last) return 0;     // loop back to start
-        return prev + 1;                // advance
+      setSelectedTimeBucket((prev) => {
+        const prevIndex = TIME_BUCKETS.findIndex((bucket) => bucket.id === prev);
+        if (prevIndex < 0 || prevIndex >= TIME_BUCKETS.length - 1) return TIME_BUCKETS[0].id;
+        return TIME_BUCKETS[prevIndex + 1].id;
       });
     }, delay);
-  
+
     return () => window.clearTimeout(id);
-  }, [timelineMode, isPlaying, playSpeedMs, availableTimes.length, timeIndex]);
+  }, [isPlaying, playSpeedMs, selectedTimeBucket]);
 
   // Handle ESC key to close popup
   useEffect(() => {
@@ -2818,13 +2899,11 @@ const densityPx = useMemo(() => {
     mrmsCursorValue,
   ]);
 
-  const activeFrameIso = useMemo(() => {
-    if (timelineMode === "history") {
-      const t = availableTimes[timeIndex];
-      if (t) return t;
-    }
-    return lastUpdate;
-  }, [timelineMode, availableTimes, timeIndex, lastUpdate]);
+  const activeFrameIso = useMemo(() => lastUpdate, [lastUpdate]);
+  const selectedTimeDisplayIso = useMemo(
+    () => requestedTimeIso ?? obsMatchMeta?.matched_time ?? lastUpdate,
+    [requestedTimeIso, obsMatchMeta, lastUpdate]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -2862,8 +2941,8 @@ const densityPx = useMemo(() => {
   }, [changeBaselineObs]);
 
   const validTimeLabel = useMemo(
-    () => formatValidTimeLabel(activeFrameIso, displayTimeZone),
-    [activeFrameIso, displayTimeZone]
+    () => formatValidTimeLabel(selectedTimeDisplayIso, displayTimeZone),
+    [selectedTimeDisplayIso, displayTimeZone]
   );
 
   const refreshMrmsMeta = useCallback(async () => {
@@ -2872,9 +2951,10 @@ const densityPx = useMemo(() => {
       setMrmsError(null);
       return;
     }
-    const targetTime = activeFrameIso ?? new Date().toISOString();
     try {
-      const res = await fetch(`/api/mrms/meta?product=${encodeURIComponent(mrmsField)}&time=${encodeURIComponent(targetTime)}`);
+      const params = new URLSearchParams({ product: mrmsField });
+      if (requestedTimeIso) params.set("time", requestedTimeIso);
+      const res = await fetch(`/api/mrms/meta?${params.toString()}`);
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload?.detail ?? `HTTP ${res.status}`);
@@ -2886,7 +2966,7 @@ const densityPx = useMemo(() => {
       setMrmsMeta(null);
       setMrmsError(e?.message ?? "Failed to load MRMS metadata");
     }
-  }, [mrmsField, activeFrameIso]);
+  }, [mrmsField, requestedTimeIso]);
 
   useEffect(() => {
     refreshMrmsMeta();
@@ -2939,7 +3019,10 @@ const densityPx = useMemo(() => {
       return;
     }
     try {
-      const res = await fetch("/api/nws/wpc_surface/latest");
+      const params = new URLSearchParams();
+      if (requestedTimeIso) params.set("time", requestedTimeIso);
+      const url = params.size > 0 ? `/api/nws/wpc_surface?${params.toString()}` : "/api/nws/wpc_surface";
+      const res = await fetch(url);
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload?.detail ?? `HTTP ${res.status}`);
@@ -2951,7 +3034,7 @@ const densityPx = useMemo(() => {
       setWpcSurface(null);
       setWpcError(e?.message ?? "Failed to load WPC surface analysis");
     }
-  }, [nwsProduct]);
+  }, [nwsProduct, requestedTimeIso]);
 
   useEffect(() => {
     refreshWpcSurface();
@@ -2959,6 +3042,77 @@ const densityPx = useMemo(() => {
     const id = window.setInterval(refreshWpcSurface, 10 * 60 * 1000);
     return () => window.clearInterval(id);
   }, [nwsProduct, refreshWpcSurface]);
+
+  const dataLayerStatuses = useMemo(() => {
+    const statuses: DataLayerStatus[] = [];
+
+    if (obsMatchMeta && lastUpdate) {
+      statuses.push({
+        key: "obs",
+        label: "Surface Observations",
+        state: "matched",
+        detail: describeMatchDetail(
+          {
+            requested_time: obsMatchMeta.requested_time,
+            matched_time: lastUpdate,
+            match_status: obsMatchMeta.match_status,
+            match_delta_minutes: obsMatchMeta.match_delta_minutes,
+            match_tolerance_minutes: obsMatchMeta.match_tolerance_minutes,
+          },
+          displayTimeZone,
+          "Showing latest observations"
+        ),
+      });
+    }
+
+    if (mrmsField !== "none") {
+      const label = `MRMS ${getMrmsProductLabel(mrmsField)}`;
+      if (mrmsMeta) {
+        statuses.push({
+          key: `mrms-${mrmsField}`,
+          label,
+          state: "matched",
+          detail: describeMatchDetail(mrmsMeta, displayTimeZone),
+        });
+      } else if (mrmsError) {
+        statuses.push({
+          key: `mrms-${mrmsField}`,
+          label,
+          state: "dropped",
+          detail: mrmsError,
+        });
+      }
+    }
+
+    if (nwsProduct === "wpcSurface") {
+      if (wpcSurface?.matched_time) {
+        statuses.push({
+          key: "wpc",
+          label: "WPC Surface Analysis",
+          state: "matched",
+          detail: describeMatchDetail(
+            {
+              requested_time: wpcSurface.requested_time ?? null,
+              matched_time: wpcSurface.matched_time,
+              match_status: wpcSurface.match_status,
+              match_delta_minutes: wpcSurface.match_delta_minutes,
+              match_tolerance_minutes: wpcSurface.match_tolerance_minutes,
+            },
+            displayTimeZone
+          ),
+        });
+      } else if (wpcError) {
+        statuses.push({
+          key: "wpc",
+          label: "WPC Surface Analysis",
+          state: "dropped",
+          detail: wpcError,
+        });
+      }
+    }
+
+    return statuses;
+  }, [displayTimeZone, lastUpdate, mrmsError, mrmsField, mrmsMeta, nwsProduct, obsMatchMeta, wpcError, wpcSurface]);
 
   const refreshOpsSummary = useCallback(async () => {
     setOpsLoading(true);
@@ -4807,6 +4961,10 @@ useEffect(() => {
 }, [displayTimeZone]);
 
 useEffect(() => {
+  localStorage.setItem("selectedTimeBucket", selectedTimeBucket);
+}, [selectedTimeBucket]);
+
+useEffect(() => {
   localStorage.setItem("mrmsField", mrmsField);
 }, [mrmsField]);
 
@@ -5259,8 +5417,14 @@ useEffect(() => {
                 <button
                   type="button"
                   className="control-btn"
-                  onClick={() => setTimeIndex((i) => Math.max(0, i - 1))}
-                  disabled={availableTimes.length === 0 || timeIndex <= 0}
+                  onClick={() => {
+                    setIsPlaying(false);
+                    setSelectedTimeBucket((prev) => {
+                      const idx = TIME_BUCKETS.findIndex((bucket) => bucket.id === prev);
+                      return idx <= 0 ? prev : TIME_BUCKETS[idx - 1].id;
+                    });
+                  }}
+                  disabled={TIME_BUCKETS.findIndex((bucket) => bucket.id === selectedTimeBucket) <= 0}
                 >
                   ◀
                 </button>
@@ -5269,7 +5433,7 @@ useEffect(() => {
                   type="button"
                   className={`control-btn ${isPlaying ? "active" : ""}`}
                   onClick={() => setIsPlaying((p) => !p)}
-                  disabled={availableTimes.length < 2}
+                  disabled={TIME_BUCKETS.length < 2}
                 >
                   {isPlaying ? "Pause" : "Play"}
                 </button>
@@ -5277,8 +5441,14 @@ useEffect(() => {
                 <button
                   type="button"
                   className="control-btn"
-                  onClick={() => setTimeIndex((i) => Math.min(availableTimes.length - 1, i + 1))}
-                  disabled={availableTimes.length === 0 || timeIndex >= availableTimes.length - 1}
+                  onClick={() => {
+                    setIsPlaying(false);
+                    setSelectedTimeBucket((prev) => {
+                      const idx = TIME_BUCKETS.findIndex((bucket) => bucket.id === prev);
+                      return idx >= TIME_BUCKETS.length - 1 ? prev : TIME_BUCKETS[idx + 1].id;
+                    });
+                  }}
+                  disabled={TIME_BUCKETS.findIndex((bucket) => bucket.id === selectedTimeBucket) >= TIME_BUCKETS.length - 1}
                 >
                   ▶
                 </button>
@@ -5295,23 +5465,25 @@ useEffect(() => {
                 </select>
               </div>
 
-              <input
-                className="time-slider"
-                type="range"
-                min={0}
-                max={Math.max(0, availableTimes.length - 1)}
-                step={1}
-                value={Math.max(0, timeIndex)}
-                onChange={(e) => {
-                  setIsPlaying(false);
-                  setTimeIndex(Number(e.target.value));
-                }}
-                disabled={availableTimes.length === 0}
-              />
+              <div className="time-bucket-row">
+                {TIME_BUCKETS.map((bucket) => (
+                  <button
+                    key={bucket.id}
+                    type="button"
+                    className={`time-bucket-btn ${selectedTimeBucket === bucket.id ? "active" : ""}`}
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setSelectedTimeBucket(bucket.id);
+                    }}
+                  >
+                    {bucket.label}
+                  </button>
+                ))}
+              </div>
 
               <div className="time-label">
-                {availableTimes[timeIndex] ? formatZulu(availableTimes[timeIndex]) : "—"}{" "}
-                {availableTimes[timeIndex] ? `(${formatAge(availableTimes[timeIndex])})` : ""}
+                {selectedBucket.label}
+                {selectedTimeDisplayIso ? ` • ${formatValidTimeLabel(selectedTimeDisplayIso, displayTimeZone)}` : ""}
               </div>
             </div>
             <div className="header-actions">
@@ -5593,6 +5765,21 @@ useEffect(() => {
                 {(displayMode === "plots" || displayMode === "weather") && <Layer {...hitTargetsLayer} key="hit-layer" />}
               </Source>
             </MapGL>
+          </div>
+          <div className="data-status-panel">
+            {dataLayerStatuses.length === 0 ? (
+              <div className="data-status-item">No time-matched layers enabled.</div>
+            ) : (
+              dataLayerStatuses.map((status) => (
+                <div
+                  key={status.key}
+                  className={`data-status-item ${status.state === "dropped" ? "dropped" : "matched"}`}
+                >
+                  <strong>{status.label}:</strong>{" "}
+                  {status.state === "dropped" ? `Unavailable for selected time: ${status.detail}` : status.detail}
+                </div>
+              ))
+            )}
           </div>
         </section>
 
