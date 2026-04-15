@@ -47,8 +47,25 @@ type TimeBucketId =
   | "minus_15m"
   | "latest";
 type MrmsField = "none" | "rala" | "composite" | "etop18" | "rotationll240" | "rotationml240" | "posh" | "mesh240";
-type NwsProduct = "none" | "wpcSurface";
+type GoesProduct = "none" | `${string}-${"02" | "09" | "13"}`;
+type GoesRenderStyle = "grayscale" | "enhanced";
+type AnalysisFill = "none" | "windSpeed" | "ceiling" | "visibility" | "relativeHumidity";
 type FrontRenderStyle = "simple" | "classic";
+type HazardMenuGroup =
+  | "convectiveWatches"
+  | "convectiveWarnings"
+  | "floodWarnings"
+  | "spcMesoscaleDiscussions"
+  | "wpcMesoscaleDiscussions";
+type HazardSectionId = "convectiveWarnings" | "spcConvectiveWatches" | "spcMesoscaleDiscussions" | "wpcMesoscaleDiscussions";
+type NwsOverlayState = {
+  wpcSurface: boolean;
+  convectiveWatches: boolean;
+  convectiveWarnings: boolean;
+  floodWarnings: boolean;
+  spcMesoscaleDiscussions: boolean;
+  wpcMesoscaleDiscussions: boolean;
+};
 
 type TimeMatchMeta = {
   requested_time: string | null;
@@ -63,6 +80,8 @@ type MrmsMetaResponse = {
   requested_time: string | null;
   matched_time: string;
   latest_time: string;
+  matched_source?: string;
+  latest_source?: string;
   match_status?: string;
   match_delta_minutes?: number;
   match_tolerance_minutes?: number | null;
@@ -85,6 +104,8 @@ type MrmsValueResponse = {
   requested_time: string | null;
   matched_time: string;
   latest_time: string;
+  matched_source?: string;
+  latest_source?: string;
   match_status?: string;
   match_delta_minutes?: number;
   match_tolerance_minutes?: number | null;
@@ -97,9 +118,96 @@ type MrmsValueResponse = {
   value_dbz: number | null;
 };
 
+type GoesMetaResponse = {
+  product: string;
+  satellite: "east" | "west";
+  sector: string;
+  band: "02" | "09" | "13";
+  label: string;
+  unit: string;
+  render_style?: GoesRenderStyle;
+  requested_time: string | null;
+  matched_time: string;
+  latest_time: string;
+  matched_source?: string;
+  latest_source?: string;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
+  age_minutes: number;
+  stale_warning: boolean;
+  available_times: string[];
+  image_url: string;
+  tile_url_template?: string;
+  corners?: [[number, number], [number, number], [number, number], [number, number]];
+  bbox: {
+    min_lon: number;
+    min_lat: number;
+    max_lon: number;
+    max_lat: number;
+  };
+};
+
+type GoesValueResponse = {
+  product: string;
+  satellite: "east" | "west";
+  sector: string;
+  band: "02" | "09" | "13";
+  label: string;
+  requested_time: string | null;
+  matched_time: string;
+  latest_time: string;
+  matched_source?: string;
+  latest_source?: string;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
+  age_minutes: number;
+  stale_warning: boolean;
+  lat: number;
+  lon: number;
+  unit: string;
+  value?: number | null;
+  raw_value?: number | null;
+};
+
 type GeoJsonFeatureCollection = {
   type: "FeatureCollection";
   features: any[];
+};
+
+type HazardListItem = {
+  id: string;
+  kind: string;
+  group: "warnings" | "watches" | "discussions";
+  menu_group: HazardMenuGroup;
+  label: string;
+  product_number: string | null;
+  title: string;
+  issued_at: string | null;
+  ends_at: string | null;
+  states: string[];
+  coverage_counties?: string[];
+  text_url: string | null;
+  discussion_text: string | null;
+  summary: string | null;
+  bbox: [number, number, number, number] | null;
+};
+
+type HazardSummaryResponse = {
+  requested_time: string | null;
+  matched_time: string | null;
+  match_status: string;
+  match_delta_minutes: number;
+  history_retention_hours: number;
+  fetched_at: string | null;
+  last_error: string | null;
+  current: {
+    warnings: HazardListItem[];
+    watches: HazardListItem[];
+    discussions: HazardListItem[];
+  };
+  matched: GeoJsonFeatureCollection;
 };
 
 type WpcSurfaceResponse = {
@@ -140,6 +248,8 @@ type DataLayerStatus = {
   detail: string;
 };
 
+type LoadStageState = "idle" | "loading" | "ready" | "error";
+
 type OpsSourceStats = {
   success: number;
   failure: number;
@@ -176,6 +286,9 @@ type OpsSummaryResponse = {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
+        latest_source?: string | null;
+        listing_latest_time?: string | null;
+        alias_latest_time?: string | null;
         available_count: number;
         last_error?: string | null;
       };
@@ -183,6 +296,9 @@ type OpsSummaryResponse = {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
+        latest_source?: string | null;
+        listing_latest_time?: string | null;
+        alias_latest_time?: string | null;
         available_count: number;
         last_error?: string | null;
       };
@@ -190,6 +306,9 @@ type OpsSummaryResponse = {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
+        latest_source?: string | null;
+        listing_latest_time?: string | null;
+        alias_latest_time?: string | null;
         available_count: number;
         last_error?: string | null;
       };
@@ -197,6 +316,9 @@ type OpsSummaryResponse = {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
+        latest_source?: string | null;
+        listing_latest_time?: string | null;
+        alias_latest_time?: string | null;
         available_count: number;
         last_error?: string | null;
       };
@@ -204,6 +326,9 @@ type OpsSummaryResponse = {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
+        latest_source?: string | null;
+        listing_latest_time?: string | null;
+        alias_latest_time?: string | null;
         available_count: number;
         last_error?: string | null;
       };
@@ -211,6 +336,9 @@ type OpsSummaryResponse = {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
+        latest_source?: string | null;
+        listing_latest_time?: string | null;
+        alias_latest_time?: string | null;
         available_count: number;
         last_error?: string | null;
       };
@@ -218,6 +346,9 @@ type OpsSummaryResponse = {
         status: string;
         latest_time: string | null;
         latest_age_minutes: number | null;
+        latest_source?: string | null;
+        listing_latest_time?: string | null;
+        alias_latest_time?: string | null;
         available_count: number;
         last_error?: string | null;
       };
@@ -348,6 +479,19 @@ const MESH240_LEGEND_ITEMS = [
   { color: "#64c864", label: "0.75–1.00 in" },
   { color: "#b4dcb4", label: "0.50–0.75 in" },
 ];
+const GOES_MENU_GROUPS = [
+  { id: "east-conus", title: "GOES-E CONUS" },
+  { id: "west-conus", title: "GOES-W CONUS" },
+] as const;
+const GOES_BAND_OPTIONS = [
+  { band: "02", label: "Band 2 Visible" },
+  { band: "13", label: "Band 13 Clean IR" },
+  { band: "09", label: "Band 9 Water Vapor" },
+] as const;
+const GOES_VISIBLE_GRADIENT = "linear-gradient(to top, #000000 0%, #3a3a3a 20%, #7a7a7a 45%, #bdbdbd 70%, #ffffff 100%)";
+const GOES_IR_GRAYSCALE_GRADIENT = "linear-gradient(to top, #f5f5f5 0%, #d7d7d7 18%, #b0b0b0 34%, #7f7f7f 52%, #4f4f4f 72%, #1a1a1a 100%)";
+const GOES_IR_GRADIENT = "linear-gradient(to top, #f5f5f5 0%, #c8c8c8 12%, #969696 28%, #646464 40%, #00e6ff 48%, #0046ff 58%, #5ae600 68%, #fff500 78%, #dc0000 88%, #400060 96%, #121212 100%)";
+const GOES_WV_GRADIENT = "linear-gradient(to top, #f0dc00 0%, #ff7878 8%, #dc0000 14%, #5a0000 20%, #ff9100 29%, #783714 36%, #505050 45%, #6e6e6e 52%, #969696 59%, #cdcdcd 66%, #fafafa 72%, #2828dc 80%, #00dc00 87%, #ffb900 93%, #dc2d00 97%, #fff5aa 100%)";
 const REFL_GRADIENT_BREAKS = [
   { value: -35, color: "#ffffff" },
   { value: 0, color: "#1e1e1e" },
@@ -384,6 +528,41 @@ function getMrmsProductUnit(product: MrmsField): string {
   return "dBZ";
 }
 
+function isValidGoesProduct(value: string | null): value is GoesProduct {
+  if (value == null) return false;
+  if (value === "none") return true;
+  return GOES_MENU_GROUPS.some((group) =>
+    GOES_BAND_OPTIONS.some((band) => value === `${group.id}-${band.band}`)
+  );
+}
+
+function getGoesMenuTitle(product: GoesProduct): string {
+  if (product === "none") return "GOES Satellite";
+  const groupId = product.slice(0, -3);
+  return GOES_MENU_GROUPS.find((group) => group.id === groupId)?.title ?? "GOES Satellite";
+}
+
+function getGoesProductLabel(product: GoesProduct): string {
+  if (product === "none") return "GOES Satellite";
+  const groupId = product.slice(0, -3);
+  const band = product.slice(-2) as "02" | "09" | "13";
+  const group = GOES_MENU_GROUPS.find((item) => item.id === groupId);
+  const bandLabel = GOES_BAND_OPTIONS.find((item) => item.band === band)?.label ?? `Band ${band}`;
+  return `${group?.title ?? "GOES"} ${bandLabel}`;
+}
+
+function getGoesProductUnit(product: GoesProduct): string {
+  if (product.endsWith("-02")) return "%";
+  if (product.endsWith("-09") || product.endsWith("-13")) return "°C";
+  return "";
+}
+
+function formatGoesCursorValue(product: GoesProduct, value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (product.endsWith("-02")) return `${value.toFixed(1)}%`;
+  return `${value.toFixed(1)}°C`;
+}
+
 function makeReflectivityGradientCss() {
   const min = -35;
   const max = 85;
@@ -412,7 +591,6 @@ const ADM1_BOUNDARIES_URL =
 const ADM2_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json";
 const ARTCC_BOUNDARIES_URL = "/api/geography/artcc";
-const CHANGE_WINDOW_HOURS = 24;
 const TIME_BUCKETS: Array<{ id: TimeBucketId; label: string; minutesAgo: number | null }> = [
   { id: "minus_360m", label: "6h", minutesAgo: 360 },
   { id: "minus_300m", label: "5h", minutesAgo: 300 },
@@ -425,24 +603,16 @@ const TIME_BUCKETS: Array<{ id: TimeBucketId; label: string; minutesAgo: number 
   { id: "minus_15m", label: "15m", minutesAgo: 15 },
   { id: "latest", label: "Latest", minutesAgo: null },
 ];
-
-const DELTA_SLP_NEG_CUTS = [-16, -12, -8, -4];
-const DELTA_SLP_POS_CUTS = [4, 8, 12, 16];
-const DELTA_SLP_NEG_COLORS = ["#4c1d95", "#6d28d9", "#7c3aed", "#8b5cf6"]; // falls -> purple
-const DELTA_SLP_POS_COLORS = ["#fdb863", "#f59e0b", "#d97706", "#92400e"]; // rises -> orange
-
-const DELTA_TEMP_CUTS_F = { neg: [-20, -12, -8, -4], pos: [4, 8, 12, 20] };
-const DELTA_TEMP_CUTS_C = { neg: [-10, -6, -4, -2], pos: [2, 4, 6, 10] };
-const DELTA_TEMP_NEG_COLORS = ["#08306b", "#08519c", "#2171b5", "#6baed6"]; // cooling -> blue
-const DELTA_TEMP_POS_COLORS = ["#fcae91", "#fb6a4a", "#de2d26", "#a50f15"]; // warming -> red
-
-const DELTA_DEWPOINT_NEG_COLORS = ["#92400e", "#b45309", "#ea580c", "#fb923c"]; // drying -> warm
-const DELTA_DEWPOINT_POS_COLORS = ["#93c5fd", "#60a5fa", "#3b82f6", "#1d4ed8"]; // moistening -> cool
-
-const DELTA_THETAE_NEG_CUTS = [-10, -6, -4, -2];
-const DELTA_THETAE_POS_CUTS = [2, 4, 6, 10];
-const DELTA_THETAE_NEG_COLORS = ["#543005", "#8c510a", "#bf812d", "#dfc27d"];
-const DELTA_THETAE_POS_COLORS = ["#c7eae5", "#80cdc1", "#35978f", "#01665e"];
+const HAZARD_STYLE_BY_KIND: Record<string, { color: string; width: number; label: string; menuGroup: HazardMenuGroup }> = {
+  tornado_watch: { color: "#dc2626", width: 2, label: "Tornado Watch", menuGroup: "convectiveWatches" },
+  severe_thunderstorm_watch: { color: "#ca8a04", width: 2, label: "Severe Thunderstorm Watch", menuGroup: "convectiveWatches" },
+  tornado_warning: { color: "#dc2626", width: 4, label: "Tornado Warning", menuGroup: "convectiveWarnings" },
+  severe_thunderstorm_warning: { color: "#ca8a04", width: 4, label: "Severe Thunderstorm Warning", menuGroup: "convectiveWarnings" },
+  flash_flood_warning: { color: "#16a34a", width: 4, label: "Flash Flood Warning", menuGroup: "floodWarnings" },
+  spc_md: { color: "#2563eb", width: 4, label: "SPC Mesoscale Discussion", menuGroup: "spcMesoscaleDiscussions" },
+  wpc_mpd: { color: "#166534", width: 4, label: "WPC Mesoscale Discussion", menuGroup: "wpcMesoscaleDiscussions" },
+};
+const HAZARD_LAYER_IDS = Object.keys(HAZARD_STYLE_BY_KIND).map((kind) => `hazard-${kind}`);
 
 type PresetView = {
   id: string;
@@ -634,10 +804,6 @@ type AnalysisGridStore = {
   mixingRatio?: ScalarGrid;
   thetaE?: ScalarGrid;
   moistureConvergence?: ScalarGrid;
-  deltaSlp24h?: ScalarGrid;
-  deltaTemp24h?: ScalarGrid;
-  deltaDewpoint24h?: ScalarGrid;
-  deltaThetaE24h?: ScalarGrid;
   windVector?: VectorGrid;
 };
 
@@ -759,50 +925,6 @@ function gaussianBlurNaN(values: Float32Array, nx: number, ny: number, passes = 
   return src;
 }
 
-function divergingColorForDelta(
-  value: number,
-  negCuts: number[],
-  posCuts: number[],
-  negColors: string[],
-  posColors: string[]
-): string | null {
-  if (!Number.isFinite(value)) return null;
-  if (value < 0) {
-    for (let i = 0; i < negCuts.length; i++) {
-      if (value <= negCuts[i]) return negColors[i];
-    }
-    return null;
-  }
-  if (value > 0) {
-    for (let i = posCuts.length - 1, c = posColors.length - 1; i >= 0; i--, c--) {
-      if (value >= posCuts[i]) return posColors[Math.max(0, c)];
-    }
-    return null;
-  }
-  return null;
-}
-
-function makeDivergingLegend(
-  negCuts: number[],
-  posCuts: number[],
-  negColors: string[],
-  posColors: string[],
-  unitLabel: string
-): Array<{ color: string; label: string }> {
-  return [
-    // Positive bins first (top of legend), strongest at top.
-    { color: posColors[3], label: `> +${posCuts[3]} ${unitLabel}` },
-    { color: posColors[2], label: `+${posCuts[2]}..+${posCuts[3]} ${unitLabel}` },
-    { color: posColors[1], label: `+${posCuts[1]}..+${posCuts[2]} ${unitLabel}` },
-    { color: posColors[0], label: `+${posCuts[0]}..+${posCuts[1]} ${unitLabel}` },
-    // Negative bins last (bottom of legend), strongest at bottom.
-    { color: negColors[3], label: `${negCuts[2]}..${negCuts[3]} ${unitLabel}` },
-    { color: negColors[2], label: `${negCuts[1]}..${negCuts[2]} ${unitLabel}` },
-    { color: negColors[1], label: `${negCuts[0]}..${negCuts[1]} ${unitLabel}` },
-    { color: negColors[0], label: `< ${negCuts[0]} ${unitLabel}` },
-  ];
-}
-
 // Thin the stations by a pixel grid to reduce the number of points on the map
 function thinByPixelGrid(
   stations: SurfaceObs[],
@@ -910,6 +1032,19 @@ function formatUptime(seconds: number | null | undefined): string {
   return `${m}m`;
 }
 
+function formatMrmsFreshnessNotes(source: {
+  latest_source?: string | null;
+  listing_latest_time?: string | null;
+  alias_latest_time?: string | null;
+  available_count: number;
+}): string {
+  const parts = [`${source.available_count} times`];
+  if (source.latest_source) parts.push(`selected: ${source.latest_source}`);
+  if (source.listing_latest_time) parts.push(`listing: ${formatZulu(source.listing_latest_time)}`);
+  if (source.alias_latest_time) parts.push(`alias: ${formatZulu(source.alias_latest_time)}`);
+  return parts.join(" | ");
+}
+
 function formatValidTimeLabel(iso: string | null, zone: DisplayTimeZone): string {
   if (!iso) return "---- UTC --- -- --- ----";
   const d = new Date(iso);
@@ -963,6 +1098,38 @@ function describeMatchDetail(
   const tense = delta > 0 ? "late" : "early";
   const minuteLabel = rounded === 1 ? "minute" : "minutes";
   return `Matched ${rounded} ${minuteLabel} ${tense} (product time: ${formatTimestampWithSeconds(meta.matched_time, zone)}).`;
+}
+
+function formatDateTimeShort(iso: string | null, zone: DisplayTimeZone): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  if (zone === "UTC") return d.toISOString().slice(5, 16).replace("T", " ") + "Z";
+  return d.toLocaleString([], {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatStatesCompact(states: string[] | null | undefined): string {
+  if (!states || states.length === 0) return "—";
+  return states.join(", ");
+}
+
+function formatCoverageCounties(counties: string[] | null | undefined): string {
+  if (!counties || counties.length === 0) return "—";
+  return counties.join("...");
+}
+
+function formatCoverageCountiesCompact(counties: string[] | null | undefined): string {
+  if (!counties || counties.length === 0) return "—";
+  const limited = counties.slice(0, 10);
+  let text = limited.join("...");
+  if (counties.length > 10) text += "...";
+  return text;
 }
 
 // Format the sky conditions as "CLR///" or "SCT015"
@@ -1461,6 +1628,9 @@ function App() {
   const analysisLabelCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisGridRef = useRef<AnalysisGridStore>({});
   const animationFrameRef = useRef<number | null>(null);
+  const analysisAnimationFrameRef = useRef<number | null>(null);
+  const analysisThrottleTimeoutRef = useRef<number | null>(null);
+  const analysisLastDrawRef = useRef<number>(0);
   const wpcFrontAnimationFrameRef = useRef<number | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursorProbe, setCursorProbe] = useState<{ x: number; y: number; lng: number; lat: number } | null>(null);
@@ -1705,6 +1875,7 @@ const densityPx = useMemo(() => {
     inflightRef.current?.abort();
     const ac = new AbortController();
     inflightRef.current = ac;
+    setObsLoadState("loading");
 
     try {
       if (requestedIso === null) {
@@ -1728,6 +1899,7 @@ const densityPx = useMemo(() => {
             : null
         );
         setIsLoading(false);
+        setObsLoadState("ready");
         return;
       }
 
@@ -1751,28 +1923,14 @@ const densityPx = useMemo(() => {
         match_tolerance_minutes: data.match_tolerance_minutes,
       });
       setIsLoading(false);
+      setObsLoadState("ready");
     } catch (e: any) {
       if (e?.name === "AbortError") return;
       console.error("Failed to fetch observations:", e);
       setObs([]);
       setObsMatchMeta(null);
       setIsLoading(false);
-    }
-  }, []);
-
-  const fetchObsSnapshot = useCallback(async (iso: string): Promise<SurfaceObs[]> => {
-    const cached = obsCacheRef.current.get(iso);
-    if (cached) return cached;
-    try {
-      const res = await fetch(`/api/obs/at?time=${encodeURIComponent(iso)}`);
-      if (!res.ok) return [];
-      const data = (await res.json()) as ObsSnapshotResponse;
-      const stations: SurfaceObs[] = data.stations ?? [];
-      obsCacheRef.current.set(data.snapshot_time ?? iso, stations);
-      return stations;
-    } catch (e) {
-      console.error("Failed to fetch snapshot for delta:", e);
-      return [];
+      setObsLoadState("error");
     }
   }, []);
 
@@ -1780,8 +1938,6 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("showStations");
     return saved === null ? true : saved === "true";
   });
-  const [changeBaselineObs, setChangeBaselineObs] = useState<SurfaceObs[]>([]);
-  const [changeBaselineIso, setChangeBaselineIso] = useState<string | null>(null);
 
   const [selectedViewId, setSelectedViewId] = useState<string>(() => {
     return localStorage.getItem("selectedViewId") ?? "";
@@ -1819,12 +1975,82 @@ const densityPx = useMemo(() => {
       ? (saved as MrmsField)
       : "none";
   });
+  const [goesProduct, setGoesProduct] = useState<GoesProduct>(() => {
+    const saved = localStorage.getItem("goesProduct");
+    return isValidGoesProduct(saved) ? saved : "none";
+  });
+  const [goesRenderStyle, setGoesRenderStyle] = useState<GoesRenderStyle>(() => {
+    const saved = localStorage.getItem("goesRenderStyle");
+    return saved === "grayscale" || saved === "enhanced" ? saved : "enhanced";
+  });
   const [mrmsMeta, setMrmsMeta] = useState<MrmsMetaResponse | null>(null);
   const [mrmsError, setMrmsError] = useState<string | null>(null);
   const [mrmsCursorValue, setMrmsCursorValue] = useState<number | null>(null);
-  const [nwsProduct, setNwsProduct] = useState<NwsProduct>(() => {
-    const saved = localStorage.getItem("nwsProduct");
-    return saved === "wpcSurface" ? "wpcSurface" : "none";
+  const [goesMeta, setGoesMeta] = useState<GoesMetaResponse | null>(null);
+  const [goesError, setGoesError] = useState<string | null>(null);
+  const [goesCursorValue, setGoesCursorValue] = useState<number | null>(null);
+  const [obsLoadState, setObsLoadState] = useState<LoadStageState>("loading");
+  const [analysisLoadState, setAnalysisLoadState] = useState<LoadStageState>("idle");
+  const [mrmsLoadState, setMrmsLoadState] = useState<LoadStageState>("idle");
+  const [goesLoadState, setGoesLoadState] = useState<LoadStageState>("idle");
+  const [hazardLoadState, setHazardLoadState] = useState<LoadStageState>("loading");
+  const [wpcLoadState, setWpcLoadState] = useState<LoadStageState>("idle");
+  const [nwsOverlays, setNwsOverlays] = useState<NwsOverlayState>(() => {
+    const raw = localStorage.getItem("nwsOverlays");
+    if (!raw) {
+      return {
+        wpcSurface: false,
+        convectiveWatches: true,
+        convectiveWarnings: true,
+        floodWarnings: true,
+        spcMesoscaleDiscussions: true,
+        wpcMesoscaleDiscussions: true,
+      };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        wpcSurface: parsed?.wpcSurface === true,
+        convectiveWatches: parsed?.convectiveWatches !== false,
+        convectiveWarnings: parsed?.convectiveWarnings !== false,
+        floodWarnings: parsed?.floodWarnings !== false,
+        spcMesoscaleDiscussions: parsed?.spcMesoscaleDiscussions !== false,
+        wpcMesoscaleDiscussions: parsed?.wpcMesoscaleDiscussions !== false,
+      };
+    } catch {
+      return {
+        wpcSurface: false,
+        convectiveWatches: true,
+        convectiveWarnings: true,
+        floodWarnings: true,
+        spcMesoscaleDiscussions: true,
+        wpcMesoscaleDiscussions: true,
+      };
+    }
+  });
+  const [hazardSummary, setHazardSummary] = useState<HazardSummaryResponse | null>(null);
+  const [hazardError, setHazardError] = useState<string | null>(null);
+  const [selectedHazard, setSelectedHazard] = useState<HazardListItem | null>(null);
+  const [hazardSectionOpen, setHazardSectionOpen] = useState<Record<HazardSectionId, boolean>>(() => {
+    const raw = localStorage.getItem("hazardSectionOpen");
+    const defaults = {
+      convectiveWarnings: false,
+      spcConvectiveWatches: false,
+      spcMesoscaleDiscussions: false,
+      wpcMesoscaleDiscussions: false,
+    };
+    if (!raw) return defaults;
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        convectiveWarnings: parsed?.convectiveWarnings === true,
+        spcConvectiveWatches: parsed?.spcConvectiveWatches === true,
+        spcMesoscaleDiscussions: parsed?.spcMesoscaleDiscussions === true,
+        wpcMesoscaleDiscussions: parsed?.wpcMesoscaleDiscussions === true,
+      };
+    } catch {
+      return defaults;
+    }
   });
   const [wpcSurface, setWpcSurface] = useState<WpcSurfaceResponse | null>(null);
   const [wpcError, setWpcError] = useState<string | null>(null);
@@ -1857,9 +2083,28 @@ const densityPx = useMemo(() => {
     });
   }, []);
 
+  const zoomToHazard = useCallback((item: HazardListItem) => {
+    if (!item.bbox) return;
+    const [minLon, minLat, maxLon, maxLat] = item.bbox;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    map.fitBounds(
+      [
+        [minLon, minLat],
+        [maxLon, maxLat],
+      ],
+      { padding: 48, duration: 650, maxZoom: 8.5 }
+    );
+  }, []);
+
   useEffect(() => {
     fetchObservations(requestedTimeIso);
   }, [fetchObservations, requestedTimeIso]);
+
+  useEffect(() => {
+    if (requestedTimeIso !== null) return;
+    fetchObservations(null);
+  }, [fetchObservations, requestedTimeIso, currentTimeTick]);
 
   useEffect(() => {
     const id = window.setInterval(() => setCurrentTimeTick(Date.now()), 60_000);
@@ -1887,13 +2132,13 @@ const densityPx = useMemo(() => {
   // Handle ESC key to close popup
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && selectedStation) {
-        closePopup();
-      }
+      if (e.key !== "Escape") return;
+      if (selectedHazard) setSelectedHazard(null);
+      if (selectedStation) closePopup();
     };
     window.addEventListener("keydown", handleEsc);
     return () => window.removeEventListener("keydown", handleEsc);
-  }, [selectedStation]);
+  }, [selectedHazard, selectedStation]);
 
   function lerp(a: number, b: number, t: number) {
     return a + (b - a) * t;
@@ -2140,7 +2385,7 @@ const densityPx = useMemo(() => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    if (nwsProduct !== "wpcSurface" || frontRenderStyle !== "classic" || !wpcSurface) return;
+    if (!nwsOverlays.wpcSurface || frontRenderStyle !== "classic" || !wpcSurface) return;
 
     const zoom = map.getZoom();
     const spacing = zoom < 4.5 ? 56 : zoom < 6.5 ? 44 : zoom < 8.5 ? 34 : 28;
@@ -2264,7 +2509,7 @@ const densityPx = useMemo(() => {
         }
       }
     }
-  }, [nwsProduct, frontRenderStyle, wpcSurface]);
+  }, [nwsOverlays.wpcSurface, frontRenderStyle, wpcSurface]);
 
   useEffect(() => {
     if (!mapLoaded) return;
@@ -2503,44 +2748,16 @@ const densityPx = useMemo(() => {
     []
   );
 
-  const deltaSlpLegend = useMemo(
-    () => makeDivergingLegend(DELTA_SLP_NEG_CUTS, DELTA_SLP_POS_CUTS, DELTA_SLP_NEG_COLORS, DELTA_SLP_POS_COLORS, "mb"),
-    []
-  );
-
-  const deltaTempLegend = useMemo(() => {
-    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
-    return makeDivergingLegend(cuts.neg, cuts.pos, DELTA_TEMP_NEG_COLORS, DELTA_TEMP_POS_COLORS, `°${tempUnit}`);
-  }, [tempUnit]);
-
-  const deltaDewpointLegend = useMemo(() => {
-    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
-    return makeDivergingLegend(cuts.neg, cuts.pos, DELTA_DEWPOINT_NEG_COLORS, DELTA_DEWPOINT_POS_COLORS, `°${tempUnit}`);
-  }, [tempUnit]);
-
-  const deltaThetaELegend = useMemo(
-    () => makeDivergingLegend(DELTA_THETAE_NEG_CUTS, DELTA_THETAE_POS_CUTS, DELTA_THETAE_NEG_COLORS, DELTA_THETAE_POS_COLORS, "K"),
-    []
-  );
-
   type AnalysisOverlay =
     | "temp"
     | "dewpoint"
     | "slp"
-    | "wind"
-    | "windSpeedFill"
-    | "ceilingFill"
-    | "visibilityFill"
-    | "relativeHumidityFill";
+    | "wind";
   type AnalysisOverlaySet = Record<AnalysisOverlay, boolean>;
   type DerivedOverlay =
     | "mixingRatio"
     | "moistureConvergence"
-    | "thetaE"
-    | "deltaSlp24h"
-    | "deltaTemp24h"
-    | "deltaDewpoint24h"
-    | "deltaThetaE24h";
+    | "thetaE";
   type DerivedOverlaySet = Record<DerivedOverlay, boolean>;
   type GeographyOverlay = "adm0" | "adm1" | "adm2" | "artcc";
   type GeographyOverlaySet = Record<GeographyOverlay, boolean>;
@@ -2555,10 +2772,6 @@ const densityPx = useMemo(() => {
           dewpoint: !!obj.dewpoint,
           slp: !!obj.slp,
           wind: !!obj.wind,
-          windSpeedFill: !!obj.windSpeedFill,
-          ceilingFill: !!obj.ceilingFill,
-          visibilityFill: !!obj.visibilityFill,
-          relativeHumidityFill: !!obj.relativeHumidityFill,
         };
       } catch {}
     }
@@ -2567,11 +2780,31 @@ const densityPx = useMemo(() => {
       dewpoint: false,
       slp: false,
       wind: false,
-      windSpeedFill: false,
-      ceilingFill: false,
-      visibilityFill: false,
-      relativeHumidityFill: false,
     };
+  });
+
+  const [analysisFill, setAnalysisFill] = useState<AnalysisFill>(() => {
+    const saved = localStorage.getItem("analysisFill");
+    if (
+      saved === "none"
+      || saved === "windSpeed"
+      || saved === "ceiling"
+      || saved === "visibility"
+      || saved === "relativeHumidity"
+    ) {
+      return saved;
+    }
+    const legacy = localStorage.getItem("analysisOverlays");
+    if (legacy) {
+      try {
+        const obj = JSON.parse(legacy) as Partial<Record<"windSpeedFill" | "ceilingFill" | "visibilityFill" | "relativeHumidityFill", boolean>>;
+        if (obj.windSpeedFill) return "windSpeed";
+        if (obj.ceilingFill) return "ceiling";
+        if (obj.visibilityFill) return "visibility";
+        if (obj.relativeHumidityFill) return "relativeHumidity";
+      } catch {}
+    }
+    return "none";
   });
   
   const anyOverlayOn =
@@ -2579,30 +2812,17 @@ const densityPx = useMemo(() => {
   || analysisOverlays.dewpoint
   || analysisOverlays.slp
   || analysisOverlays.wind
-  || analysisOverlays.windSpeedFill
-  || analysisOverlays.ceilingFill
-  || analysisOverlays.visibilityFill
-  || analysisOverlays.relativeHumidityFill;
+  || analysisFill !== "none";
 
   const [derivedOverlays, setDerivedOverlays] = useState<DerivedOverlaySet>(() => {
     const saved = localStorage.getItem("derivedOverlays");
     if (saved) {
       try {
-        const obj = JSON.parse(saved) as Partial<DerivedOverlaySet> & {
-          deltaSlp3h?: boolean;
-          deltaTemp3h?: boolean;
-          deltaDewpoint3h?: boolean;
-          deltaThetaE3h?: boolean;
-        };
+        const obj = JSON.parse(saved) as Partial<DerivedOverlaySet>;
         return {
           mixingRatio: !!obj.mixingRatio,
           moistureConvergence: !!obj.moistureConvergence,
           thetaE: !!obj.thetaE,
-          // Backward-compatible migration from older `*3h` keys.
-          deltaSlp24h: !!(obj.deltaSlp24h ?? obj.deltaSlp3h),
-          deltaTemp24h: !!(obj.deltaTemp24h ?? obj.deltaTemp3h),
-          deltaDewpoint24h: !!(obj.deltaDewpoint24h ?? obj.deltaDewpoint3h),
-          deltaThetaE24h: !!(obj.deltaThetaE24h ?? obj.deltaThetaE3h),
         };
       } catch {}
     }
@@ -2610,10 +2830,6 @@ const densityPx = useMemo(() => {
       mixingRatio: false,
       moistureConvergence: false,
       thetaE: false,
-      deltaSlp24h: false,
-      deltaTemp24h: false,
-      deltaDewpoint24h: false,
-      deltaThetaE24h: false,
     };
   });
 
@@ -2621,11 +2837,7 @@ const densityPx = useMemo(() => {
     anyOverlayOn
     || derivedOverlays.mixingRatio
     || derivedOverlays.moistureConvergence
-    || derivedOverlays.thetaE
-    || derivedOverlays.deltaSlp24h
-    || derivedOverlays.deltaTemp24h
-    || derivedOverlays.deltaDewpoint24h
-    || derivedOverlays.deltaThetaE24h;
+    || derivedOverlays.thetaE;
 
   type LegendItem = { color: string; label: string };
   type LegendCard = { title: string; items: LegendItem[] };
@@ -2637,31 +2849,48 @@ const densityPx = useMemo(() => {
       gradientCss: makeReflectivityGradientCss(),
     };
   }, [mrmsField]);
+  const goesGradientLegend = useMemo(() => {
+    if (!goesProduct || goesProduct === "none") return null;
+    if (goesProduct.endsWith("-02")) {
+      return {
+        title: `${getGoesMenuTitle(goesProduct)} Visible (%)`,
+        labels: ["100", "80", "60", "40", "20", "0"],
+        gradientCss: GOES_VISIBLE_GRADIENT,
+      };
+    }
+    if (goesRenderStyle === "grayscale") {
+      return {
+        title: `${getGoesMenuTitle(goesProduct)} ${goesProduct.endsWith("-09") ? "Band 9" : "Band 13"} Grayscale (°C)`,
+        labels: ["-90", "-75", "-60", "-45", "-30", goesProduct.endsWith("-13") ? "15" : "-5"],
+        gradientCss: GOES_IR_GRAYSCALE_GRADIENT,
+      };
+    }
+    if (goesProduct.endsWith("-09")) {
+      return {
+        title: `${getGoesMenuTitle(goesProduct)} Band 9 Enhanced (°C)`,
+        labels: ["0", "-10", "-20", "-30", "-40", "-50", "-60", "-70", "-80", "-90"],
+        gradientCss: GOES_WV_GRADIENT,
+      };
+    }
+    return {
+      title: `${getGoesMenuTitle(goesProduct)} Band 13 Enhanced (°C)`,
+      labels: ["-90", "-75", "-60", "-45", "-30", goesProduct.endsWith("-13") ? "15" : "-5"],
+      gradientCss: GOES_IR_GRADIENT,
+    };
+  }, [goesProduct, goesRenderStyle]);
   const activeFillLegendCards = useMemo<LegendCard[]>(() => {
     const cards: LegendCard[] = [];
-    if (analysisOverlays.windSpeedFill) {
+    if (analysisFill === "windSpeed") {
       cards.push({ title: `Wind Speed (${windUnit})`, items: windFillLegend });
     }
-    if (analysisOverlays.ceilingFill) {
+    if (analysisFill === "ceiling") {
       cards.push({ title: "Ceiling (hundreds ft)", items: ceilingFillLegend });
     }
-    if (analysisOverlays.visibilityFill) {
+    if (analysisFill === "visibility") {
       cards.push({ title: "Visibility (SM)", items: visibilityFillLegend });
     }
-    if (analysisOverlays.relativeHumidityFill) {
+    if (analysisFill === "relativeHumidity") {
       cards.push({ title: "RH Critical (%)", items: relativeHumidityLegend });
-    }
-    if (derivedOverlays.deltaSlp24h) {
-      cards.push({ title: "24h SLP Change (mb)", items: deltaSlpLegend });
-    }
-    if (derivedOverlays.deltaTemp24h) {
-      cards.push({ title: `24h Temp Change (°${tempUnit})`, items: deltaTempLegend });
-    }
-    if (derivedOverlays.deltaDewpoint24h) {
-      cards.push({ title: `24h Dewpoint Change (°${tempUnit})`, items: deltaDewpointLegend });
-    }
-    if (derivedOverlays.deltaThetaE24h) {
-      cards.push({ title: "24h Theta-e Change (K)", items: deltaThetaELegend });
     }
     if (mrmsField === "etop18") {
       cards.push({
@@ -2687,35 +2916,23 @@ const densityPx = useMemo(() => {
         items: MESH240_LEGEND_ITEMS,
       });
     }
-    if (nwsProduct === "wpcSurface") {
+    if (nwsOverlays.wpcSurface) {
       cards.push({ title: "WPC Surface Analysis", items: WPC_LEGEND_ITEMS });
     }
     return cards;
   }, [
-    analysisOverlays.windSpeedFill,
-    analysisOverlays.ceilingFill,
-    analysisOverlays.visibilityFill,
-    analysisOverlays.relativeHumidityFill,
+    analysisFill,
     windUnit,
     windFillLegend,
     ceilingFillLegend,
     visibilityFillLegend,
     relativeHumidityLegend,
-    derivedOverlays.deltaSlp24h,
-    derivedOverlays.deltaTemp24h,
-    derivedOverlays.deltaDewpoint24h,
-    derivedOverlays.deltaThetaE24h,
-    deltaSlpLegend,
-    deltaTempLegend,
-    deltaDewpointLegend,
-    deltaThetaELegend,
-    tempUnit,
     mrmsField,
-    nwsProduct,
+    nwsOverlays.wpcSurface,
   ]);
 
   type ContourLegendItem = {
-    key: "temp" | "dewpoint" | "slp" | "mixingRatio" | "moistureConvergence" | "thetaE";
+    key: string;
     label: string;
     color: string;
     width: number;
@@ -2751,6 +2968,19 @@ const densityPx = useMemo(() => {
         width: 2.6,
       });
     }
+    const seenHazards = new Set<string>();
+    for (const feature of hazardSummary?.matched?.features ?? []) {
+      const kind = String(feature?.properties?.kind ?? "");
+      const style = HAZARD_STYLE_BY_KIND[kind];
+      if (!style || seenHazards.has(kind) || !nwsOverlays[style.menuGroup]) continue;
+      seenHazards.add(kind);
+      items.push({
+        key: `hazard-${kind}`,
+        label: style.label,
+        color: style.color,
+        width: style.width,
+      });
+    }
     return items;
   }, [
     analysisOverlays.temp,
@@ -2759,6 +2989,8 @@ const densityPx = useMemo(() => {
     derivedOverlays.mixingRatio,
     derivedOverlays.thetaE,
     derivedOverlays.moistureConvergence,
+    hazardSummary,
+    nwsOverlays,
     tempUnit,
   ]);
 
@@ -2793,25 +3025,25 @@ const densityPx = useMemo(() => {
         });
       }
     }
-    if (analysisOverlays.windSpeedFill) {
+    if (analysisFill === "windSpeed") {
       const v = sampleScalarGrid(g.windSpeed, x, y);
       rows.push({
         label: `Wind Speed Fill (${windUnit})`,
         value: v == null ? "—" : knotsToWindUnit(v, windUnit).toFixed(1),
       });
     }
-    if (analysisOverlays.ceilingFill) {
+    if (analysisFill === "ceiling") {
       const v = sampleScalarGrid(g.ceiling, x, y);
       const val = v == null ? "—" : String(Math.round(v)).padStart(3, "0");
       const suffix = v != null && v > 50 ? " (hidden on map)" : "";
       rows.push({ label: "Ceiling (hundreds ft)", value: `${val}${suffix}` });
     }
-    if (analysisOverlays.visibilityFill) {
+    if (analysisFill === "visibility") {
       const v = sampleScalarGrid(g.visibility, x, y);
       const suffix = v != null && v > 6 ? " (hidden on map)" : "";
       rows.push({ label: "Visibility (SM)", value: v == null ? "—" : `${v.toFixed(2)}${suffix}` });
     }
-    if (analysisOverlays.relativeHumidityFill) {
+    if (analysisFill === "relativeHumidity") {
       const v = sampleScalarGrid(g.relativeHumidity, x, y);
       const hidden = v != null && v >= 25 && v <= 90;
       rows.push({
@@ -2835,42 +3067,6 @@ const densityPx = useMemo(() => {
         value: v == null ? "—" : `${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
       });
     }
-    if (derivedOverlays.deltaSlp24h) {
-      const v = sampleScalarGrid(g.deltaSlp24h, x, y);
-      const hidden = v != null && Math.abs(v) <= 4;
-      rows.push({
-        label: "24h SLP Change (mb)",
-        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
-      });
-    }
-    if (derivedOverlays.deltaTemp24h) {
-      const v = sampleScalarGrid(g.deltaTemp24h, x, y);
-      const warmCut = tempUnit === "F" ? 4 : 2;
-      const coolCut = tempUnit === "F" ? -4 : -2;
-      const hidden = v != null && !(v > warmCut || v < coolCut);
-      rows.push({
-        label: `24h Temp Change (°${tempUnit})`,
-        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
-      });
-    }
-    if (derivedOverlays.deltaDewpoint24h) {
-      const v = sampleScalarGrid(g.deltaDewpoint24h, x, y);
-      const warmCut = tempUnit === "F" ? 4 : 2;
-      const coolCut = tempUnit === "F" ? -4 : -2;
-      const hidden = v != null && !(v > warmCut || v < coolCut);
-      rows.push({
-        label: `24h Dewpoint Change (°${tempUnit})`,
-        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
-      });
-    }
-    if (derivedOverlays.deltaThetaE24h) {
-      const v = sampleScalarGrid(g.deltaThetaE24h, x, y);
-      const hidden = v != null && !(v > 2 || v < -2);
-      rows.push({
-        label: "24h Theta-e Change (K)",
-        value: v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}${hidden ? " (hidden on map)" : ""}`,
-      });
-    }
     if (derivedOverlays.moistureConvergence) {
       const v = sampleScalarGrid(g.moistureConvergence, x, y);
       const hidden = v != null && v < 1;
@@ -2886,59 +3082,32 @@ const densityPx = useMemo(() => {
         value: mrmsCursorValue == null ? "—" : mrmsCursorValue.toFixed(precision),
       });
     }
+    if (goesProduct !== "none") {
+      rows.push({
+        label: `${getGoesProductLabel(goesProduct)} (${getGoesProductUnit(goesProduct)})`,
+        value: formatGoesCursorValue(goesProduct, goesCursorValue),
+      });
+    }
 
     return rows;
   }, [
     cursorProbe,
     showCursorDiagnostics,
     analysisOverlays,
+    analysisFill,
     derivedOverlays,
     tempUnit,
     windUnit,
     mrmsField,
     mrmsCursorValue,
+    goesProduct,
+    goesCursorValue,
   ]);
 
-  const activeFrameIso = useMemo(() => lastUpdate, [lastUpdate]);
   const selectedTimeDisplayIso = useMemo(
     () => requestedTimeIso ?? obsMatchMeta?.matched_time ?? lastUpdate,
     [requestedTimeIso, obsMatchMeta, lastUpdate]
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!activeFrameIso) {
-      setChangeBaselineObs([]);
-      setChangeBaselineIso(null);
-      return;
-    }
-
-    const targetMs = new Date(activeFrameIso).getTime() - CHANGE_WINDOW_HOURS * 60 * 60 * 1000;
-    if (!Number.isFinite(targetMs)) {
-      setChangeBaselineObs([]);
-      setChangeBaselineIso(null);
-      return;
-    }
-
-    const targetIso = new Date(targetMs).toISOString();
-
-    (async () => {
-      const baseline = await fetchObsSnapshot(targetIso);
-      if (cancelled) return;
-      setChangeBaselineObs(baseline);
-      setChangeBaselineIso(targetIso);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeFrameIso, fetchObsSnapshot]);
-
-  const changeBaselineById = useMemo(() => {
-    const m = new Map<string, SurfaceObs>();
-    for (const s of changeBaselineObs) m.set(s.id, s);
-    return m;
-  }, [changeBaselineObs]);
 
   const validTimeLabel = useMemo(
     () => formatValidTimeLabel(selectedTimeDisplayIso, displayTimeZone),
@@ -2949,8 +3118,10 @@ const densityPx = useMemo(() => {
     if (mrmsField === "none") {
       setMrmsMeta(null);
       setMrmsError(null);
+      setMrmsLoadState("idle");
       return;
     }
+    setMrmsLoadState("loading");
     try {
       const params = new URLSearchParams({ product: mrmsField });
       if (requestedTimeIso) params.set("time", requestedTimeIso);
@@ -2962,9 +3133,11 @@ const densityPx = useMemo(() => {
       const data = (await res.json()) as MrmsMetaResponse;
       setMrmsMeta(data);
       setMrmsError(null);
+      setMrmsLoadState("ready");
     } catch (e: any) {
       setMrmsMeta(null);
       setMrmsError(e?.message ?? "Failed to load MRMS metadata");
+      setMrmsLoadState("error");
     }
   }, [mrmsField, requestedTimeIso]);
 
@@ -3012,12 +3185,86 @@ const densityPx = useMemo(() => {
     cursorProbe?.lng,
   ]);
 
-  const refreshWpcSurface = useCallback(async () => {
-    if (nwsProduct !== "wpcSurface") {
-      setWpcSurface(null);
-      setWpcError(null);
+  const refreshGoesMeta = useCallback(async () => {
+    if (goesProduct === "none") {
+      setGoesMeta(null);
+      setGoesError(null);
+      setGoesLoadState("idle");
       return;
     }
+    setGoesLoadState("loading");
+    try {
+      const params = new URLSearchParams({ product: goesProduct });
+      if (!goesProduct.endsWith("-02")) params.set("style", goesRenderStyle);
+      if (requestedTimeIso) params.set("time", requestedTimeIso);
+      const res = await fetch(`/api/goes/meta?${params.toString()}`);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as GoesMetaResponse;
+      setGoesMeta(data);
+      setGoesError(null);
+      setGoesLoadState("ready");
+    } catch (e: any) {
+      setGoesMeta(null);
+      setGoesError(e?.message ?? "Failed to load GOES metadata");
+      setGoesLoadState("error");
+    }
+  }, [goesProduct, goesRenderStyle, requestedTimeIso]);
+
+  useEffect(() => {
+    refreshGoesMeta();
+  }, [refreshGoesMeta]);
+
+  useEffect(() => {
+    if (!showCursorDiagnostics || goesProduct === "none" || !goesMeta || !cursorProbe) {
+      setGoesCursorValue(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          product: goesProduct,
+          time: goesMeta.matched_time,
+          lat: cursorProbe.lat.toFixed(5),
+          lon: cursorProbe.lng.toFixed(5),
+        });
+        const res = await fetch(`/api/goes/value?${params.toString()}`, { signal: controller.signal });
+        if (!res.ok) {
+          setGoesCursorValue(null);
+          return;
+        }
+        const data = (await res.json()) as GoesValueResponse;
+        const sampled = data.value;
+        setGoesCursorValue(sampled == null || !Number.isFinite(sampled) ? null : sampled);
+      } catch (e: any) {
+        if (e?.name !== "AbortError") setGoesCursorValue(null);
+      }
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    showCursorDiagnostics,
+    goesProduct,
+    goesMeta,
+    cursorProbe?.lat,
+    cursorProbe?.lng,
+  ]);
+
+  const refreshWpcSurface = useCallback(async () => {
+    if (!nwsOverlays.wpcSurface) {
+      setWpcSurface(null);
+      setWpcError(null);
+      setWpcLoadState("idle");
+      return;
+    }
+    setWpcLoadState("loading");
     try {
       const params = new URLSearchParams();
       if (requestedTimeIso) params.set("time", requestedTimeIso);
@@ -3030,18 +3277,48 @@ const densityPx = useMemo(() => {
       const data = (await res.json()) as WpcSurfaceResponse;
       setWpcSurface(data);
       setWpcError(null);
+      setWpcLoadState("ready");
     } catch (e: any) {
       setWpcSurface(null);
       setWpcError(e?.message ?? "Failed to load WPC surface analysis");
+      setWpcLoadState("error");
     }
-  }, [nwsProduct, requestedTimeIso]);
+  }, [nwsOverlays.wpcSurface, requestedTimeIso]);
 
   useEffect(() => {
     refreshWpcSurface();
-    if (nwsProduct !== "wpcSurface") return;
+    if (!nwsOverlays.wpcSurface) return;
     const id = window.setInterval(refreshWpcSurface, 10 * 60 * 1000);
     return () => window.clearInterval(id);
-  }, [nwsProduct, refreshWpcSurface]);
+  }, [nwsOverlays.wpcSurface, refreshWpcSurface]);
+
+  const refreshHazardSummary = useCallback(async () => {
+    setHazardLoadState("loading");
+    try {
+      const params = new URLSearchParams();
+      if (requestedTimeIso) params.set("time", requestedTimeIso);
+      const url = params.size > 0 ? `/api/hazards/summary?${params.toString()}` : "/api/hazards/summary";
+      const res = await fetch(url);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as HazardSummaryResponse;
+      setHazardSummary(data);
+      setHazardError(null);
+      setHazardLoadState("ready");
+    } catch (e: any) {
+      setHazardSummary(null);
+      setHazardError(e?.message ?? "Failed to load hazards summary");
+      setHazardLoadState("error");
+    }
+  }, [requestedTimeIso]);
+
+  useEffect(() => {
+    refreshHazardSummary();
+    const id = window.setInterval(refreshHazardSummary, 2 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [refreshHazardSummary]);
 
   const dataLayerStatuses = useMemo(() => {
     const statuses: DataLayerStatus[] = [];
@@ -3084,7 +3361,26 @@ const densityPx = useMemo(() => {
       }
     }
 
-    if (nwsProduct === "wpcSurface") {
+    if (goesProduct !== "none") {
+      const label = getGoesProductLabel(goesProduct);
+      if (goesMeta) {
+        statuses.push({
+          key: `goes-${goesProduct}`,
+          label,
+          state: "matched",
+          detail: describeMatchDetail(goesMeta, displayTimeZone),
+        });
+      } else if (goesError) {
+        statuses.push({
+          key: `goes-${goesProduct}`,
+          label,
+          state: "dropped",
+          detail: goesError,
+        });
+      }
+    }
+
+    if (nwsOverlays.wpcSurface) {
       if (wpcSurface?.matched_time) {
         statuses.push({
           key: "wpc",
@@ -3111,8 +3407,73 @@ const densityPx = useMemo(() => {
       }
     }
 
+    if (hazardError) {
+      statuses.push({
+        key: "hazards",
+        label: "Hazards",
+        state: "dropped",
+        detail: hazardError,
+      });
+    }
+
     return statuses;
-  }, [displayTimeZone, lastUpdate, mrmsError, mrmsField, mrmsMeta, nwsProduct, obsMatchMeta, wpcError, wpcSurface]);
+  }, [displayTimeZone, goesError, goesMeta, goesProduct, hazardError, lastUpdate, mrmsError, mrmsField, mrmsMeta, nwsOverlays.wpcSurface, obsMatchMeta, wpcError, wpcSurface]);
+
+  const loadingStages = useMemo(() => {
+    const stages: Array<{ key: string; label: string; state: LoadStageState }> = [
+      { key: "obs", label: "Observation Data", state: obsLoadState },
+      { key: "hazards", label: "Hazards", state: hazardLoadState },
+      { key: "map", label: "Map", state: mapLoaded ? "ready" : "loading" },
+    ];
+    if (anyAnalysisLikeOverlayOn) {
+      stages.push({ key: "analysis", label: "Objective Analysis", state: analysisLoadState });
+    }
+    if (mrmsField !== "none") {
+      stages.push({ key: "mrms", label: `MRMS ${getMrmsProductLabel(mrmsField)}`, state: mrmsLoadState });
+    }
+    if (goesProduct !== "none") {
+      stages.push({ key: "goes", label: getGoesProductLabel(goesProduct), state: goesLoadState });
+    }
+    if (nwsOverlays.wpcSurface) {
+      stages.push({ key: "wpc", label: "WPC Surface", state: wpcLoadState });
+    }
+    return stages;
+  }, [obsLoadState, hazardLoadState, mapLoaded, anyAnalysisLikeOverlayOn, analysisLoadState, mrmsField, mrmsLoadState, goesProduct, goesLoadState, nwsOverlays.wpcSurface, wpcLoadState]);
+
+  const loadingProgress = useMemo(() => {
+    const total = loadingStages.length;
+    const completed = loadingStages.filter((stage) => stage.state === "ready" || stage.state === "error").length;
+    const active = loadingStages.filter((stage) => stage.state === "loading").map((stage) => stage.label);
+    const errors = loadingStages.filter((stage) => stage.state === "error").map((stage) => stage.label);
+    const percent = total > 0 ? Math.round((completed / total) * 100) : 100;
+    const statusText =
+      active.length > 0
+        ? `Loading ${active.join(", ")}`
+        : errors.length > 0
+          ? `Completed with issues: ${errors.join(", ")}`
+          : "All enabled layers ready";
+    return {
+      percent,
+      active,
+      errors,
+      isBusy: active.length > 0,
+      statusText,
+    };
+  }, [loadingStages]);
+
+  const visibleHazardFeatures = useMemo(() => {
+    const features = hazardSummary?.matched?.features ?? [];
+    return features.filter((feature) => {
+      const kind = String(feature?.properties?.kind ?? "");
+      const style = HAZARD_STYLE_BY_KIND[kind];
+      return style ? nwsOverlays[style.menuGroup] : false;
+    });
+  }, [hazardSummary, nwsOverlays]);
+
+  const visibleHazardsGeoJson = useMemo<GeoJsonFeatureCollection>(
+    () => ({ type: "FeatureCollection", features: visibleHazardFeatures }),
+    [visibleHazardFeatures]
+  );
 
   const refreshOpsSummary = useCallback(async () => {
     setOpsLoading(true);
@@ -3152,6 +3513,17 @@ const densityPx = useMemo(() => {
     return `${base}${sep}cb=${encodeURIComponent(mrmsMeta.matched_time)}`;
   }, [mrmsField, mrmsMeta]);
 
+  const goesTileTemplate = useMemo(() => {
+    if (goesProduct === "none" || !goesMeta) return null;
+    const base =
+      goesMeta.tile_url_template ??
+      `/api/goes/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(goesProduct)}&time=${encodeURIComponent(
+        goesMeta.matched_time
+      )}${goesProduct.endsWith("-02") ? "" : `&style=${encodeURIComponent(goesRenderStyle)}`}`;
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}cb=${encodeURIComponent(goesMeta.matched_time)}`;
+  }, [goesProduct, goesMeta, goesRenderStyle]);
+
   const mrmsRasterLayer: any = useMemo(
     () => ({
       id: "mrms-raster-layer",
@@ -3163,6 +3535,47 @@ const densityPx = useMemo(() => {
         "raster-resampling": "nearest",
       },
     }),
+    []
+  );
+
+  const goesRasterLayer: any = useMemo(
+    () => ({
+      id: "goes-raster-layer",
+      type: "raster",
+      source: "goes-raster-tiles",
+      maxzoom: 9,
+      paint: {
+        "raster-opacity": 0.82,
+        "raster-resampling": "nearest",
+      },
+    }),
+    []
+  );
+
+  const hazardLineLayers: any[] = useMemo(
+    () =>
+      Object.entries(HAZARD_STYLE_BY_KIND).map(([kind, style]) => ({
+        id: `hazard-${kind}`,
+        type: "line",
+        source: "hazards-source",
+        filter: ["==", ["get", "kind"], kind],
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": style.color,
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            3, Math.max(1.5, style.width * 0.7),
+            6, style.width,
+            9, style.width + 0.6,
+          ],
+          "line-opacity": 0.9,
+        },
+      })),
     []
   );
 
@@ -3370,22 +3783,22 @@ const densityPx = useMemo(() => {
       type: "line",
       source: "adm1-boundaries",
       paint: {
-        "line-color": "rgba(30, 41, 59, 0.72)",
+        "line-color": "rgba(15, 23, 42, 0.9)",
         "line-width": [
           "interpolate",
           ["linear"],
           ["zoom"],
-          2, 0.35,
-          5, 0.55,
-          8, 0.9,
+          2, 0.6,
+          5, 0.95,
+          8, 1.35,
         ],
         "line-opacity": [
           "interpolate",
           ["linear"],
           ["zoom"],
-          2, 0.36,
-          4, 0.56,
-          8, 0.8,
+          2, 0.55,
+          4, 0.72,
+          8, 0.9,
         ],
       },
     }),
@@ -3398,23 +3811,23 @@ const densityPx = useMemo(() => {
       type: "line",
       source: "adm2-boundaries",
       paint: {
-        "line-color": "rgba(51, 65, 85, 0.52)",
+        "line-color": "rgba(30, 41, 59, 0.72)",
         "line-width": [
           "interpolate",
           ["linear"],
           ["zoom"],
-          4, 0.2,
-          7, 0.3,
-          10, 0.55,
+          4, 0.32,
+          7, 0.48,
+          10, 0.78,
         ],
         "line-opacity": [
           "interpolate",
           ["linear"],
           ["zoom"],
-          4, 0.12,
-          6, 0.2,
-          8, 0.38,
-          10, 0.55,
+          4, 0.2,
+          6, 0.34,
+          8, 0.52,
+          10, 0.68,
         ],
       },
     }),
@@ -3753,12 +4166,12 @@ function labelContours(
 const drawAnalysisOverlay = useCallback(() => {
   if (!anyAnalysisLikeOverlayOn) {
     analysisGridRef.current = {};
-    return;
+    return false;
   }
 
   const canvas = analysisCanvasRef.current;
   const mapObj = mapRef.current?.getMap();
-  if (!canvas || !mapObj) return;
+  if (!canvas || !mapObj) return false;
 
   const map = mapObj;
 
@@ -3766,6 +4179,10 @@ const drawAnalysisOverlay = useCallback(() => {
   const rect = canvas.getBoundingClientRect();
   const width = rect.width;
   const height = rect.height;
+  if (width < 2 || height < 2) {
+    analysisGridRef.current = {};
+    return false;
+  }
 
   canvas.width = Math.max(1, Math.round(width * dpr));
   canvas.height = Math.max(1, Math.round(height * dpr));
@@ -3773,7 +4190,7 @@ const drawAnalysisOverlay = useCallback(() => {
   canvas.style.height = `${height}px`;
 
   const ctx0 = canvas.getContext("2d");
-  if (!ctx0) return;
+  if (!ctx0) return false;
   const ctx = ctx0;
 
   // Work in CSS pixel space
@@ -3786,7 +4203,7 @@ const drawAnalysisOverlay = useCallback(() => {
   const stations = declutteredObs;
   if (!stations || stations.length === 0) {
     analysisGridRef.current = {};
-    return;
+    return false;
   }
 
   // Performance knobs (contours are heavier than shading)
@@ -3934,56 +4351,6 @@ const drawAnalysisOverlay = useCallback(() => {
     return null;
   }
 
-  function scalarFillColorForDeltaSlp24h(v: number): string | null {
-    if (!(v > 4 || v < -4)) return null;
-    return divergingColorForDelta(
-      v,
-      DELTA_SLP_NEG_CUTS,
-      DELTA_SLP_POS_CUTS,
-      DELTA_SLP_NEG_COLORS,
-      DELTA_SLP_POS_COLORS
-    );
-  }
-
-  function scalarFillColorForDeltaTemp24h(v: number): string | null {
-    const warmCut = tempUnit === "F" ? 4 : 2;
-    const coolCut = tempUnit === "F" ? -4 : -2;
-    if (!(v > warmCut || v < coolCut)) return null;
-    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
-    return divergingColorForDelta(
-      v,
-      cuts.neg,
-      cuts.pos,
-      DELTA_TEMP_NEG_COLORS,
-      DELTA_TEMP_POS_COLORS
-    );
-  }
-
-  function scalarFillColorForDeltaDewpoint24h(v: number): string | null {
-    const warmCut = tempUnit === "F" ? 4 : 2;
-    const coolCut = tempUnit === "F" ? -4 : -2;
-    if (!(v > warmCut || v < coolCut)) return null;
-    const cuts = tempUnit === "F" ? DELTA_TEMP_CUTS_F : DELTA_TEMP_CUTS_C;
-    return divergingColorForDelta(
-      v,
-      cuts.neg,
-      cuts.pos,
-      DELTA_DEWPOINT_NEG_COLORS,
-      DELTA_DEWPOINT_POS_COLORS
-    );
-  }
-
-  function scalarFillColorForDeltaThetaE24h(v: number): string | null {
-    if (!(v > 2 || v < -2)) return null;
-    return divergingColorForDelta(
-      v,
-      DELTA_THETAE_NEG_CUTS,
-      DELTA_THETAE_POS_CUTS,
-      DELTA_THETAE_NEG_COLORS,
-      DELTA_THETAE_POS_COLORS
-    );
-  }
-
   function drawScalarFill(
     pts: Array<{ x: number; y: number; val: number }>,
     colorFn: (value: number) => string | null,
@@ -4122,74 +4489,6 @@ const drawAnalysisOverlay = useCallback(() => {
     }
     const grid = drawScalarFill(pts, scalarFillColorForRelativeHumidity, 0.44, 110, 4);
     if (grid) computedGrids.relativeHumidity = grid;
-  }
-
-  function collectDeltaStationPoints(
-    compute: (current: SurfaceObs, baseline: SurfaceObs) => number | null
-  ): Array<{ x: number; y: number; val: number }> {
-    const pts: Array<{ x: number; y: number; val: number }> = [];
-    for (const current of declutteredObs) {
-      const baseline = changeBaselineById.get(current.id);
-      if (!baseline) continue;
-      const val = compute(current, baseline);
-      if (!Number.isFinite(val)) continue;
-      const p = map.project([current.lon, current.lat]);
-      pts.push({ x: p.x, y: p.y, val });
-    }
-    return pts;
-  }
-
-  function drawDeltaSlp24hFill() {
-    const pts = collectDeltaStationPoints((current, baseline) => {
-      if (isExcludedFromAnalysis(current, "slp") || isExcludedFromAnalysis(baseline, "slp")) return null;
-      if (current.pressureMb == null || baseline.pressureMb == null) return null;
-      return current.pressureMb - baseline.pressureMb;
-    });
-    const grid = drawScalarFill(pts, scalarFillColorForDeltaSlp24h, 0.48, 130, 4);
-    if (grid) computedGrids.deltaSlp24h = grid;
-  }
-
-  function drawDeltaTemp24hFill() {
-    const pts = collectDeltaStationPoints((current, baseline) => {
-      if (isExcludedFromAnalysis(current, "temp") || isExcludedFromAnalysis(baseline, "temp")) return null;
-      if (current.tempC == null || baseline.tempC == null) return null;
-      const deltaC = current.tempC - baseline.tempC;
-      return tempUnit === "F" ? deltaC * (9 / 5) : deltaC;
-    });
-    const grid = drawScalarFill(pts, scalarFillColorForDeltaTemp24h, 0.48, 130, 4);
-    if (grid) computedGrids.deltaTemp24h = grid;
-  }
-
-  function drawDeltaDewpoint24hFill() {
-    const pts = collectDeltaStationPoints((current, baseline) => {
-      if (isExcludedFromAnalysis(current, "dewpoint") || isExcludedFromAnalysis(baseline, "dewpoint")) return null;
-      if (current.dewpointC == null || baseline.dewpointC == null) return null;
-      const deltaC = current.dewpointC - baseline.dewpointC;
-      return tempUnit === "F" ? deltaC * (9 / 5) : deltaC;
-    });
-    const grid = drawScalarFill(pts, scalarFillColorForDeltaDewpoint24h, 0.48, 130, 4);
-    if (grid) computedGrids.deltaDewpoint24h = grid;
-  }
-
-  function drawDeltaThetaE24hFill() {
-    const pts = collectDeltaStationPoints((current, baseline) => {
-      if (
-        isExcludedFromAnalysis(current, "temp")
-        || isExcludedFromAnalysis(current, "dewpoint")
-        || isExcludedFromAnalysis(current, "slp")
-        || isExcludedFromAnalysis(baseline, "temp")
-        || isExcludedFromAnalysis(baseline, "dewpoint")
-        || isExcludedFromAnalysis(baseline, "slp")
-      ) return null;
-      if (current.tempC == null || current.dewpointC == null || current.pressureMb == null) return null;
-      if (baseline.tempC == null || baseline.dewpointC == null || baseline.pressureMb == null) return null;
-      const currentThetaE = equivalentPotentialTemperatureK(current.tempC, current.dewpointC, current.pressureMb);
-      const baselineThetaE = equivalentPotentialTemperatureK(baseline.tempC, baseline.dewpointC, baseline.pressureMb);
-      if (currentThetaE == null || baselineThetaE == null) return null;
-      return currentThetaE - baselineThetaE;
-    });
-    const grid = drawScalarFill(pts, scalarFillColorForDeltaThetaE24h, 0.48, 130, 4);
-    if (grid) computedGrids.deltaThetaE24h = grid;
   }
 
   function drawMoistureConvergenceContours() {
@@ -4619,14 +4918,10 @@ const drawAnalysisOverlay = useCallback(() => {
     }
   };
 
-    if (analysisOverlays.windSpeedFill) drawWindSpeedFill();
-    if (analysisOverlays.ceilingFill) drawCeilingFill();
-    if (analysisOverlays.visibilityFill) drawVisibilityFill();
-    if (analysisOverlays.relativeHumidityFill) drawRelativeHumidityFill();
-    if (derivedOverlays.deltaSlp24h) drawDeltaSlp24hFill();
-    if (derivedOverlays.deltaTemp24h) drawDeltaTemp24hFill();
-    if (derivedOverlays.deltaDewpoint24h) drawDeltaDewpoint24hFill();
-    if (derivedOverlays.deltaThetaE24h) drawDeltaThetaE24hFill();
+    if (analysisFill === "windSpeed") drawWindSpeedFill();
+    if (analysisFill === "ceiling") drawCeilingFill();
+    if (analysisFill === "visibility") drawVisibilityFill();
+    if (analysisFill === "relativeHumidity") drawRelativeHumidityFill();
     if (derivedOverlays.moistureConvergence) drawMoistureConvergenceContours();
     // draw order: pressure under, dewpoint, then temp on top
     if (analysisOverlays.slp) drawOne("slp");
@@ -4638,7 +4933,8 @@ const drawAnalysisOverlay = useCallback(() => {
   
     analysisGridRef.current = computedGrids;
     ctx.globalAlpha = 1;
-  }, [analysisOverlays, derivedOverlays, declutteredObs, tempUnit, anyAnalysisLikeOverlayOn, windRenderMode, windUnit, changeBaselineById]);
+    return true;
+  }, [analysisOverlays, analysisFill, derivedOverlays, declutteredObs, tempUnit, anyAnalysisLikeOverlayOn, windRenderMode, windUnit]);
 
 function windToUV(dirDeg: number, spdKt: number) {
   // METAR direction is "from" direction.
@@ -4666,7 +4962,7 @@ const exportPng = useCallback(() => {
 
   // Overlay canvases (only draw if they exist / are mounted)
   const overlayCanvases: HTMLCanvasElement[] = [];
-  if (nwsProduct === "wpcSurface" && frontRenderStyle === "classic" && wpcFrontCanvasRef.current) {
+  if (nwsOverlays.wpcSurface && frontRenderStyle === "classic" && wpcFrontCanvasRef.current) {
     overlayCanvases.push(wpcFrontCanvasRef.current);
   }
   if (analysisCanvasRef.current) overlayCanvases.push(analysisCanvasRef.current);
@@ -4864,7 +5160,7 @@ const exportPng = useCallback(() => {
 
     if (contourLegendItems.length > 0) {
       ctx.font = `600 ${titleFontSize}px sans-serif`;
-      let maxTextWidth = Math.ceil(ctx.measureText("Contours").width);
+      let maxTextWidth = Math.ceil(ctx.measureText("Lines").width);
       ctx.font = `${fontSize}px sans-serif`;
       for (const item of contourLegendItems) {
         maxTextWidth = Math.max(maxTextWidth, Math.ceil(ctx.measureText(item.label).width));
@@ -4886,7 +5182,7 @@ const exportPng = useCallback(() => {
 
       ctx.fillStyle = "#e5e7eb";
       ctx.font = `700 ${titleFontSize}px sans-serif`;
-      ctx.fillText("CONTOURS", x + padX, y + padY + titleH - 2 * scale);
+      ctx.fillText("LINES", x + padX, y + padY + titleH - 2 * scale);
 
       ctx.font = `${fontSize}px sans-serif`;
       for (let i = 0; i < contourLegendItems.length; i++) {
@@ -4916,7 +5212,7 @@ const exportPng = useCallback(() => {
   a.href = dataUrl;
   a.download = `wx-mesoanalysis_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   a.click();
-}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems, validTimeLabel, nwsProduct, frontRenderStyle, legendsCollapsed, mrmsGradientLegend]);
+}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems, validTimeLabel, nwsOverlays.wpcSurface, frontRenderStyle, legendsCollapsed, mrmsGradientLegend]);
 
 useEffect(() => {
   localStorage.setItem("showStations", String(showStations));
@@ -4927,14 +5223,112 @@ useEffect(() => {
 }, [selectedViewId]);
 
 useEffect(() => {
-  if (!mapLoaded) return;
-  if (!anyAnalysisLikeOverlayOn) return;
-  drawAnalysisOverlay();
+  if (!anyAnalysisLikeOverlayOn) {
+    setAnalysisLoadState("idle");
+    return;
+  }
+  if (!mapLoaded) {
+    setAnalysisLoadState("loading");
+    return;
+  }
+
+  let cancelled = false;
+  let frame2: number | null = null;
+  setAnalysisLoadState("loading");
+  const frameId = window.requestAnimationFrame(() => {
+    frame2 = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      try {
+        drawAnalysisOverlay();
+        if (!cancelled) setAnalysisLoadState("ready");
+      } catch (error) {
+        console.error("Failed to draw objective analysis overlay:", error);
+        if (!cancelled) setAnalysisLoadState("error");
+      }
+    });
+  });
+
+  return () => {
+    cancelled = true;
+    window.cancelAnimationFrame(frameId);
+    if (frame2 != null) window.cancelAnimationFrame(frame2);
+  };
+}, [mapLoaded, anyAnalysisLikeOverlayOn, drawAnalysisOverlay]);
+
+useEffect(() => {
+  if (!mapLoaded || !anyAnalysisLikeOverlayOn) return;
+
+  const map = mapRef.current?.getMap();
+  if (!map) return;
+
+  const runRedraw = () => {
+    if (analysisAnimationFrameRef.current) {
+      cancelAnimationFrame(analysisAnimationFrameRef.current);
+    }
+    analysisAnimationFrameRef.current = requestAnimationFrame(() => {
+      analysisLastDrawRef.current = performance.now();
+      drawAnalysisOverlay();
+    });
+  };
+
+  const scheduleThrottledRedraw = () => {
+    const now = performance.now();
+    const elapsed = now - analysisLastDrawRef.current;
+    const throttleMs = 120;
+    if (elapsed >= throttleMs) {
+      if (analysisThrottleTimeoutRef.current != null) {
+        window.clearTimeout(analysisThrottleTimeoutRef.current);
+        analysisThrottleTimeoutRef.current = null;
+      }
+      runRedraw();
+      return;
+    }
+    if (analysisThrottleTimeoutRef.current != null) return;
+    analysisThrottleTimeoutRef.current = window.setTimeout(() => {
+      analysisThrottleTimeoutRef.current = null;
+      runRedraw();
+    }, throttleMs - elapsed);
+  };
+
+  const finalizeRedraw = () => {
+    if (analysisThrottleTimeoutRef.current != null) {
+      window.clearTimeout(analysisThrottleTimeoutRef.current);
+      analysisThrottleTimeoutRef.current = null;
+    }
+    runRedraw();
+  };
+
+  map.on("move", scheduleThrottledRedraw);
+  map.on("zoom", scheduleThrottledRedraw);
+  map.on("moveend", finalizeRedraw);
+  map.on("zoomend", finalizeRedraw);
+  map.on("resize", finalizeRedraw);
+  finalizeRedraw();
+
+  return () => {
+    map.off("move", scheduleThrottledRedraw);
+    map.off("zoom", scheduleThrottledRedraw);
+    map.off("moveend", finalizeRedraw);
+    map.off("zoomend", finalizeRedraw);
+    map.off("resize", finalizeRedraw);
+    if (analysisAnimationFrameRef.current) {
+      cancelAnimationFrame(analysisAnimationFrameRef.current);
+      analysisAnimationFrameRef.current = null;
+    }
+    if (analysisThrottleTimeoutRef.current != null) {
+      window.clearTimeout(analysisThrottleTimeoutRef.current);
+      analysisThrottleTimeoutRef.current = null;
+    }
+  };
 }, [mapLoaded, anyAnalysisLikeOverlayOn, drawAnalysisOverlay]);
 
 useEffect(() => {
   localStorage.setItem("analysisOverlays", JSON.stringify(analysisOverlays));
 }, [analysisOverlays]);
+
+useEffect(() => {
+  localStorage.setItem("analysisFill", analysisFill);
+}, [analysisFill]);
 
 useEffect(() => {
   localStorage.setItem("derivedOverlays", JSON.stringify(derivedOverlays));
@@ -4969,8 +5363,20 @@ useEffect(() => {
 }, [mrmsField]);
 
 useEffect(() => {
-  localStorage.setItem("nwsProduct", nwsProduct);
-}, [nwsProduct]);
+  localStorage.setItem("goesProduct", goesProduct);
+}, [goesProduct]);
+
+useEffect(() => {
+  localStorage.setItem("goesRenderStyle", goesRenderStyle);
+}, [goesRenderStyle]);
+
+useEffect(() => {
+  localStorage.setItem("nwsOverlays", JSON.stringify(nwsOverlays));
+}, [nwsOverlays]);
+
+useEffect(() => {
+  localStorage.setItem("hazardSectionOpen", JSON.stringify(hazardSectionOpen));
+}, [hazardSectionOpen]);
 
 useEffect(() => {
   localStorage.setItem("frontRenderStyle", frontRenderStyle);
@@ -5089,46 +5495,56 @@ useEffect(() => {
                     />
                     Wind (Objective)
                   </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={analysisOverlays.windSpeedFill}
-                      onChange={(e) =>
-                        setAnalysisOverlays((s) => ({ ...s, windSpeedFill: e.target.checked }))
-                      }
-                    />
-                    Wind Speed (Fill)
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={analysisOverlays.ceilingFill}
-                      onChange={(e) =>
-                        setAnalysisOverlays((s) => ({ ...s, ceilingFill: e.target.checked }))
-                      }
-                    />
-                    Ceiling (Fill, &le;050)
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={analysisOverlays.visibilityFill}
-                      onChange={(e) =>
-                        setAnalysisOverlays((s) => ({ ...s, visibilityFill: e.target.checked }))
-                      }
-                    />
-                    Visibility (Fill, &le;6SM)
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={analysisOverlays.relativeHumidityFill}
-                      onChange={(e) =>
-                        setAnalysisOverlays((s) => ({ ...s, relativeHumidityFill: e.target.checked }))
-                      }
-                    />
-                    Relative Humidity (Critical Fill)
-                  </label>
+                  <details className="view-submenu">
+                    <summary>Filled Analysis</summary>
+                    <div className="view-submenu-content">
+                      <label>
+                        <input
+                          type="radio"
+                          name="analysis-fill"
+                          checked={analysisFill === "none"}
+                          onChange={() => setAnalysisFill("none")}
+                        />
+                        Off
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="analysis-fill"
+                          checked={analysisFill === "windSpeed"}
+                          onChange={() => setAnalysisFill("windSpeed")}
+                        />
+                        Wind Speed
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="analysis-fill"
+                          checked={analysisFill === "ceiling"}
+                          onChange={() => setAnalysisFill("ceiling")}
+                        />
+                        Ceiling (&le;050)
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="analysis-fill"
+                          checked={analysisFill === "visibility"}
+                          onChange={() => setAnalysisFill("visibility")}
+                        />
+                        Visibility (&le;6SM)
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="analysis-fill"
+                          checked={analysisFill === "relativeHumidity"}
+                          onChange={() => setAnalysisFill("relativeHumidity")}
+                        />
+                        Relative Humidity
+                      </label>
+                    </div>
+                  </details>
                 </div>
               </details>
             </div>
@@ -5167,47 +5583,6 @@ useEffect(() => {
                       }
                     />
                     Moisture Convergence (Contours)
-                  </label>
-                  <div className="analysis-subsection-title">24-hour change</div>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={derivedOverlays.deltaSlp24h}
-                      onChange={(e) =>
-                        setDerivedOverlays((s) => ({ ...s, deltaSlp24h: e.target.checked }))
-                      }
-                    />
-                    SLP Change (24h)
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={derivedOverlays.deltaTemp24h}
-                      onChange={(e) =>
-                        setDerivedOverlays((s) => ({ ...s, deltaTemp24h: e.target.checked }))
-                      }
-                    />
-                    Temperature Change (24h)
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={derivedOverlays.deltaDewpoint24h}
-                      onChange={(e) =>
-                        setDerivedOverlays((s) => ({ ...s, deltaDewpoint24h: e.target.checked }))
-                      }
-                    />
-                    Dewpoint Change (24h)
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={derivedOverlays.deltaThetaE24h}
-                      onChange={(e) =>
-                        setDerivedOverlays((s) => ({ ...s, deltaThetaE24h: e.target.checked }))
-                      }
-                    />
-                    Theta-e Change (24h)
                   </label>
                 </div>
               </details>
@@ -5293,27 +5668,123 @@ useEffect(() => {
               </details>
             </div>
             <div className="analysis-control">
+              <div className="analysis-title">GOES Satellite</div>
+              <details className="analysis-dropdown">
+                <summary>GOES Satellite</summary>
+                <div className="analysis-menu goes-menu">
+                  <label>
+                    <input
+                      type="radio"
+                      name="goes-product"
+                      checked={goesProduct === "none"}
+                      onChange={() => setGoesProduct("none")}
+                    />
+                    Off
+                  </label>
+                  <details className="view-submenu goes-submenu">
+                    <summary>Display Style</summary>
+                    <div className="view-submenu-content goes-submenu-content">
+                      <div className="goes-submenu-options">
+                        <label>
+                          <input
+                            type="radio"
+                            name="goes-render-style"
+                            checked={goesRenderStyle === "enhanced"}
+                            onChange={() => setGoesRenderStyle("enhanced")}
+                          />
+                          Enhanced
+                        </label>
+                        <label>
+                          <input
+                            type="radio"
+                            name="goes-render-style"
+                            checked={goesRenderStyle === "grayscale"}
+                            onChange={() => setGoesRenderStyle("grayscale")}
+                          />
+                          Grayscale
+                        </label>
+                      </div>
+                    </div>
+                  </details>
+                  {GOES_MENU_GROUPS.map((group) => (
+                    <details className="view-submenu goes-submenu" key={group.id}>
+                      <summary>{group.title}</summary>
+                      <div className="view-submenu-content goes-submenu-content">
+                        <div className="goes-submenu-options">
+                          {GOES_BAND_OPTIONS.map((option) => {
+                            const productId = `${group.id}-${option.band}` as GoesProduct;
+                            return (
+                              <label key={productId}>
+                                <input
+                                  type="radio"
+                                  name="goes-product"
+                                  checked={goesProduct === productId}
+                                  onChange={() => setGoesProduct(productId)}
+                                />
+                                {option.label}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </details>
+            </div>
+            <div className="analysis-control">
               <div className="analysis-title">NWS Products</div>
               <details className="analysis-dropdown">
                 <summary>NWS Products</summary>
                 <div className="analysis-menu">
                   <label>
                     <input
-                      type="radio"
-                      name="nws-product"
-                      checked={nwsProduct === "none"}
-                      onChange={() => setNwsProduct("none")}
+                      type="checkbox"
+                      checked={nwsOverlays.wpcSurface}
+                      onChange={(e) => setNwsOverlays((s) => ({ ...s, wpcSurface: e.target.checked }))}
                     />
-                    Off
+                    WPC Surface Analysis
+                  </label>
+                  <div className="analysis-subsection-title">Hazards</div>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={nwsOverlays.convectiveWatches}
+                      onChange={(e) => setNwsOverlays((s) => ({ ...s, convectiveWatches: e.target.checked }))}
+                    />
+                    SPC Convective Watches
                   </label>
                   <label>
                     <input
-                      type="radio"
-                      name="nws-product"
-                      checked={nwsProduct === "wpcSurface"}
-                      onChange={() => setNwsProduct("wpcSurface")}
+                      type="checkbox"
+                      checked={nwsOverlays.convectiveWarnings}
+                      onChange={(e) => setNwsOverlays((s) => ({ ...s, convectiveWarnings: e.target.checked }))}
                     />
-                    WPC Surface Analysis (Latest)
+                    Convective Warnings
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={nwsOverlays.floodWarnings}
+                      onChange={(e) => setNwsOverlays((s) => ({ ...s, floodWarnings: e.target.checked }))}
+                    />
+                    Flood Warnings
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={nwsOverlays.spcMesoscaleDiscussions}
+                      onChange={(e) => setNwsOverlays((s) => ({ ...s, spcMesoscaleDiscussions: e.target.checked }))}
+                    />
+                    SPC Mesoscale Discussions
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={nwsOverlays.wpcMesoscaleDiscussions}
+                      onChange={(e) => setNwsOverlays((s) => ({ ...s, wpcMesoscaleDiscussions: e.target.checked }))}
+                    />
+                    WPC Mesoscale Discussions
                   </label>
                 </div>
               </details>
@@ -5521,18 +5992,23 @@ useEffect(() => {
                 MRMS {getMrmsProductLabel(mrmsField)} unavailable: {mrmsError}
               </div>
             )}
-            {nwsProduct === "wpcSurface" && wpcSurface?.stale_warning && (
+            {nwsOverlays.wpcSurface && wpcSurface?.stale_warning && (
               <div className="mrms-warning-overlay">
                 WPC surface analysis warning: latest parsed valid time is {wpcSurface.valid_time ? formatZulu(wpcSurface.valid_time) : "unknown"}
                 {typeof wpcSurface.age_minutes === "number" ? ` (${Math.round(wpcSurface.age_minutes)} min old)` : ""}.
               </div>
             )}
-            {nwsProduct === "wpcSurface" && wpcError && (
+            {nwsOverlays.wpcSurface && wpcError && (
               <div className="mrms-warning-overlay mrms-warning-error">
                 WPC surface analysis unavailable: {wpcError}
               </div>
             )}
-            {nwsProduct === "wpcSurface" && frontRenderStyle === "classic" && (
+            {hazardError && (
+              <div className="mrms-warning-overlay mrms-warning-error" style={{ top: 44 }}>
+                Hazards unavailable: {hazardError}
+              </div>
+            )}
+            {nwsOverlays.wpcSurface && frontRenderStyle === "classic" && (
               <canvas
                 ref={wpcFrontCanvasRef}
                 className="wpc-front-canvas"
@@ -5595,7 +6071,7 @@ useEffect(() => {
               />
             )}
 
-            {!legendsCollapsed && (activeFillLegendCards.length > 0 || Boolean(mrmsGradientLegend)) && (
+            {!legendsCollapsed && (activeFillLegendCards.length > 0 || Boolean(mrmsGradientLegend) || Boolean(goesGradientLegend)) && (
               <div className="analysis-legends">
                 {activeFillLegendCards.map((card) => (
                   <div className="analysis-legend" key={`fill-legend-${card.title}`}>
@@ -5623,6 +6099,19 @@ useEffect(() => {
                   </div>
                 </div>
                 )}
+                {goesGradientLegend && (
+                <div className="analysis-legend">
+                  <div className="wind-fill-legend-title">{goesGradientLegend.title}</div>
+                  <div className="mrms-gradient-legend-body">
+                    <div className="mrms-gradient-bar" style={{ background: goesGradientLegend.gradientCss }} />
+                    <div className="mrms-gradient-labels">
+                      {goesGradientLegend.labels.map((lbl) => (
+                        <span key={`goes-grad-${lbl}`}>{lbl}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                )}
               </div>
             )}
 
@@ -5635,7 +6124,7 @@ useEffect(() => {
             {!legendsCollapsed && contourLegendItems.length > 0 && (
               <div className="contour-legends">
                 <div className="analysis-legend">
-                  <div className="wind-fill-legend-title">Contours</div>
+                  <div className="wind-fill-legend-title">Lines</div>
                   <ul className="wind-fill-legend-list">
                     {contourLegendItems.map((item) => (
                       <li key={`contour-legend-${item.key}`}>
@@ -5667,11 +6156,12 @@ useEffect(() => {
               maxZoom={12}
               mapStyle={mapStyle}
               attributionControl={true}
-                  interactiveLayerIds={
-                    showStations
+              interactiveLayerIds={[
+                ...(visibleHazardFeatures.length > 0 ? HAZARD_LAYER_IDS : []),
+                ...(showStations
                   ? (displayMode === "plots" || displayMode === "weather" ? ["hit-targets"] : ["unclustered"])
-                  : []
-                  }
+                  : []),
+              ]}
               onMouseMove={(e) => {
                 if (!showCursorDiagnostics) return;
                 setCursorProbe({
@@ -5686,10 +6176,30 @@ useEffect(() => {
                 setCursorProbe(null);
               }}
               onClick={(e) => {
-                if (!showStations) return;
                 const map = mapRef.current?.getMap();
                 if (!map) return;
 
+                if (visibleHazardFeatures.length > 0) {
+                  const hazardFeatures = map.queryRenderedFeatures(e.point, { layers: HAZARD_LAYER_IDS });
+                  const hazardFeature = hazardFeatures?.[0];
+                  const hazardId = String((hazardFeature?.properties as any)?.id ?? "");
+                  if (hazardId) {
+                    const currentItems = [
+                      ...(hazardSummary?.current?.warnings ?? []),
+                      ...(hazardSummary?.current?.watches ?? []),
+                      ...(hazardSummary?.current?.discussions ?? []),
+                    ];
+                    const hazard =
+                      currentItems.find((item) => item.id === hazardId)
+                      ?? ((hazardFeature?.properties as any) as HazardListItem | undefined);
+                    if (hazard) {
+                      setSelectedHazard(hazard as HazardListItem);
+                      return;
+                    }
+                  }
+                }
+
+                if (!showStations) return;
                 const layers = displayMode === "plots" || displayMode === "weather" ? ["hit-targets"] : ["unclustered"];
                 const features = map.queryRenderedFeatures(e.point, { layers });
 
@@ -5711,6 +6221,17 @@ useEffect(() => {
               }}
             >
               <NavigationControl position="top-left" />
+              {goesProduct !== "none" && goesTileTemplate && (
+                <Source
+                  id="goes-raster-tiles"
+                  key={goesTileTemplate}
+                  type="raster"
+                  tiles={[goesTileTemplate]}
+                  tileSize={256}
+                >
+                  <Layer {...goesRasterLayer} />
+                </Source>
+              )}
               {mrmsField !== "none" && mrmsTileTemplate && (
                 <Source
                   id="mrms-raster-tiles"
@@ -5722,7 +6243,14 @@ useEffect(() => {
                   <Layer {...mrmsRasterLayer} />
                 </Source>
               )}
-              {nwsProduct === "wpcSurface" && wpcSurface && frontRenderStyle === "simple" && (
+              {visibleHazardFeatures.length > 0 && (
+                <Source id="hazards-source" type="geojson" data={visibleHazardsGeoJson}>
+                  {hazardLineLayers.map((layer) => (
+                    <Layer key={layer.id} {...layer} />
+                  ))}
+                </Source>
+              )}
+              {nwsOverlays.wpcSurface && wpcSurface && frontRenderStyle === "simple" && (
                 <>
                   <Source id="wpc-fronts" type="geojson" data={wpcSurface.fronts}>
                     <Layer {...wpcFrontColdLayer} />
@@ -5734,7 +6262,7 @@ useEffect(() => {
                   </Source>
                 </>
               )}
-              {nwsProduct === "wpcSurface" && wpcSurface && (
+              {nwsOverlays.wpcSurface && wpcSurface && (
                 <Source id="wpc-centers" type="geojson" data={wpcSurface.centers}>
                   <Layer {...wpcCenterLayer} />
                   <Layer {...wpcCenterPressureLayer} />
@@ -5766,6 +6294,28 @@ useEffect(() => {
               </Source>
             </MapGL>
           </div>
+          <div className="loading-progress-panel map-loading-progress">
+            <div className="loading-progress-meta">
+              <span className="loading-progress-text">{loadingProgress.statusText}</span>
+              <span className="loading-progress-percent">{loadingProgress.percent}%</span>
+            </div>
+            <div className="loading-progress-bar">
+              <div
+                className={`loading-progress-fill ${loadingProgress.isBusy ? "busy" : ""}`}
+                style={{ width: `${loadingProgress.percent}%` }}
+              />
+            </div>
+            <div className="loading-stage-list">
+              {loadingStages.map((stage) => (
+                <span
+                  key={stage.key}
+                  className={`loading-stage-pill state-${stage.state}`}
+                >
+                  {stage.label}: {stage.state}
+                </span>
+              ))}
+            </div>
+          </div>
           <div className="data-status-panel">
             {dataLayerStatuses.length === 0 ? (
               <div className="data-status-item">No time-matched layers enabled.</div>
@@ -5784,279 +6334,128 @@ useEffect(() => {
         </section>
 
         <aside className="sidebar">
-          <div className="sidebar-header">
-            <h2>Surface Observations</h2>
-            {lastUpdate && (
-              <p className="update-time">
-                Updated: {new Date(lastUpdate).toLocaleTimeString()}
-              </p>
-            )}
-            {isLoading ? (
-              <p>Loading observations...</p>
-            ) : obs.length === 0 ? (
-              <p>No data available.</p>
-            ) : (
-              <p className="station-count">
-                {visibleObs.length} of {obs.length} stations visible
-              </p>
-            )}
-            {displayMode === "weather" && (
-              <p className="station-count">
-                Unknown weather symbols: {unknownWxSymbolCount}
-              </p>
-            )}
-          </div>
-          {showCursorDiagnostics && (
-            <div className="diagnostics-panel">
-              <div className="diagnostics-title">Cursor Diagnostics</div>
-              {!cursorProbe ? (
-                <div className="diagnostics-empty">Move cursor over map to inspect enabled fields.</div>
-              ) : (
-                <>
-                  <div className="diagnostics-meta">
-                    <span>{cursorProbe.lat.toFixed(3)}°, {cursorProbe.lng.toFixed(3)}°</span>
-                    <span>{lastUpdate ? formatZulu(lastUpdate) : "—"}</span>
-                  </div>
-                  {diagnosticsRows.length === 0 ? (
-                    <div className="diagnostics-empty">No enabled analysis/derived fields.</div>
-                  ) : (
-                    <div className="diagnostics-table">
-                      {diagnosticsRows.map((row) => (
-                        <div key={`diag-${row.label}`} className="diagnostics-row">
-                          <span className="diagnostics-label">{row.label}</span>
-                          <span className="diagnostics-value">{row.value}</span>
-                        </div>
-                      ))}
+          <div className="sidebar-content hazard-sidebar-content">
+            {showCursorDiagnostics && (
+              <div className="diagnostics-panel">
+                <div className="diagnostics-title">Cursor Diagnostics</div>
+                {!cursorProbe ? (
+                  <div className="diagnostics-empty">Move cursor over map to inspect enabled fields.</div>
+                ) : (
+                  <>
+                    <div className="diagnostics-meta">
+                      <span>{cursorProbe.lat.toFixed(3)}°, {cursorProbe.lng.toFixed(3)}°</span>
+                      <span>{lastUpdate ? formatZulu(lastUpdate) : "—"}</span>
                     </div>
-                  )}
-                </>
+                    {diagnosticsRows.length === 0 ? (
+                      <div className="diagnostics-empty">No enabled analysis/derived fields.</div>
+                    ) : (
+                      <div className="diagnostics-table">
+                        {diagnosticsRows.map((row) => (
+                          <div key={`diag-${row.label}`} className="diagnostics-row">
+                            <span className="diagnostics-label">{row.label}</span>
+                            <span className="diagnostics-value">{row.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            <div className="sidebar-header hazard-sidebar-header">
+              <h2>Active Hazards</h2>
+              {hazardSummary?.fetched_at && (
+                <p className="update-time">Updated: {formatDateTimeShort(hazardSummary.fetched_at, displayTimeZone)}</p>
               )}
             </div>
-          )}
-          {!isLoading && obs.length > 0 && (
-            <div className="sidebar-content">
-              <ul className="obs-list">
-                {visibleObs.map((s) => {
-                  const isExpanded = expandedStations.has(s.id);
-                  return (
-                    <li key={s.id} id={`obs-${s.id}`} className={isExpanded ? "expanded" : ""}>
-                      <div
-                        className="obs-item-header"
-                        onClick={() => toggleExpanded(s.id)}
-                      >
-                        <div className="obs-item-main">
-                          <strong>{s.id}</strong> - {s.name} – {formatTempDetailed(s.tempC)}
-                          {s.dewpointC !== null && formatDewpoint(s.dewpointC)}
-                          {hasQcFlags(s) && <span className="qc-badge-inline">QC</span>}
-                          {s.windSpeedKt !== null && (
-                            <span className="wind-info">
-                              {" "}
-                              {s.windDirDeg !== null
-                                ? `${Math.round(s.windDirDeg)}°`
-                                : ""}{" "}
-                              {formatWindSpeedCompact(s.windSpeedKt)}
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          className="expand-btn"
-                          aria-label={isExpanded ? "Collapse" : "Expand"}
-                        >
-                          {isExpanded ? "−" : "+"}
-                        </button>
-                      </div>
-                      {isExpanded && (
-                        <div className="obs-item-details">
-                          <div className="detail-row">
-                            <span className="detail-label">Location:</span>
-                            <span>{s.name} ({s.id})</span>
-                          </div>
-                          {s.obsTimeUtc && (
-                            <div className="detail-row">
-                              <span className="detail-label">Observation Time:</span>
-                              <span className={obsAgeClass(s.obsTimeUtc)}>
-                                {new Date(s.obsTimeUtc).toLocaleString()} ({formatAge(s.obsTimeUtc)})
-                              </span>
-                            </div>
-                          )}
-
-                          {hasQcFlags(s) && (
-                            <div className="detail-section">
-                              <div className="detail-section-title">Data Quality</div>
-                              <div className="qc-summary">
-                                Potentially bad data flagged.
+            {[
+              {
+                key: "convectiveWarnings" as HazardSectionId,
+                title: "Active Convective Warnings",
+                items: (hazardSummary?.current.warnings ?? []).filter((item) => item.kind === "tornado_warning" || item.kind === "severe_thunderstorm_warning"),
+              },
+              {
+                key: "spcConvectiveWatches" as HazardSectionId,
+                title: "Active SPC Convective Watches",
+                items: hazardSummary?.current.watches ?? [],
+              },
+              {
+                key: "spcMesoscaleDiscussions" as HazardSectionId,
+                title: "Active SPC Mesoscale Discussions",
+                items: (hazardSummary?.current.discussions ?? []).filter((item) => item.kind === "spc_md"),
+              },
+              {
+                key: "wpcMesoscaleDiscussions" as HazardSectionId,
+                title: "Active WPC Mesoscale Discussions",
+                items: (hazardSummary?.current.discussions ?? []).filter((item) => item.kind === "wpc_mpd"),
+              },
+            ].map((section) => {
+              const hasActive = section.items.length > 0;
+              const isOpen = hazardSectionOpen[section.key];
+              return (
+                <section
+                  key={section.key}
+                  className={`hazard-section ${hasActive ? "has-active" : ""} ${isOpen ? "open" : "collapsed"}`}
+                >
+                  <button
+                    type="button"
+                    className="hazard-section-toggle"
+                    onClick={() => setHazardSectionOpen((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
+                    aria-expanded={isOpen}
+                  >
+                    <span className="hazard-section-title">{section.title}</span>
+                    <span className="hazard-section-actions">
+                      <span className={`hazard-count-pill ${hasActive ? "has-active" : ""}`}>{section.items.length}</span>
+                      <span className="hazard-section-chevron">{isOpen ? "−" : "+"}</span>
+                    </span>
+                  </button>
+                  {isOpen && (
+                    section.items.length === 0 ? (
+                      <div className="hazard-empty">No active products.</div>
+                    ) : (
+                      <ul className="hazard-list">
+                        {section.items.map((item) => (
+                          <li key={item.id} className="hazard-item">
+                            {(() => {
+                              const isWarning =
+                                item.kind === "tornado_warning"
+                                || item.kind === "severe_thunderstorm_warning"
+                                || item.kind === "flash_flood_warning";
+                              const hasCountyCoverage = isWarning && Array.isArray(item.coverage_counties) && item.coverage_counties.length > 0;
+                              return (
+                            <button type="button" className="hazard-item-main" onClick={() => zoomToHazard(item)}>
+                              <div className="hazard-item-title">
+                                {item.label}
+                                {item.product_number ? ` ${item.product_number}` : ""}
                               </div>
-                              <ul className="qc-list">
-                                {(s.qcFlags ?? []).map((flag, idx) => (
-                                  <li key={`${s.id}-qc-${idx}`}>{flag}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                          
-                          <div className="detail-section">
-                            <div className="detail-section-title">Flight Conditions</div>
-                            <div className="detail-row">
-                              <span className="detail-label">Flight Rule:</span>
-                              <span className={`flight-rule flight-rule-${s.flightRule.toLowerCase()}`}>
-                                {s.flightRule}
-                              </span>
-                            </div>
-                            {s.visibilityMi !== null && (
-                              <div className="detail-row">
-                                <span className="detail-label">Visibility:</span>
-                                <span>{s.visibilityMi.toFixed(2)} SM</span>
+                              <div className="hazard-item-times">
+                                {formatDateTimeShort(item.issued_at, displayTimeZone)} to {formatDateTimeShort(item.ends_at, displayTimeZone)}
                               </div>
-                            )}
-                            {s.ceilingFt !== null ? (
-                              <div className="detail-row">
-                                <span className="detail-label">Ceiling:</span>
-                                <span>{s.ceilingFt.toFixed(0)} ft</span>
+                              <div className="hazard-item-states">
+                                {hasCountyCoverage ? formatCoverageCountiesCompact(item.coverage_counties) : formatStatesCompact(item.states)}
                               </div>
-                            ) : (
-                              <div className="detail-row">
-                                <span className="detail-label">Ceiling:</span>
-                                <span>Unlimited</span>
-                              </div>
-                            )}
-                            {s.skyConditions.length > 0 && (
-                              <div className="detail-row">
-                                <span className="detail-label">Sky Conditions:</span>
-                                <span className="sky-conditions">
-                                  {s.skyConditions.map((sc, idx) => (
-                                    <span key={idx} className="sky-condition">
-                                      {sc.cover}
-                                      {sc.level_ft !== null && ` ${Math.round(sc.level_ft)}`}
-                                      {idx < s.skyConditions.length - 1 && ", "}
-                                    </span>
-                                  ))}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="detail-section">
-                            <div className="detail-section-title">Temperature & Humidity</div>
-                            <div className="detail-row">
-                              <span className="detail-label">Temperature:</span>
-                              <span>{formatTempDetailed(s.tempC)}</span>
-                            </div>
-                            {s.dewpointC !== null && (
-                              <div className="detail-row">
-                                <span className="detail-label">Dewpoint:</span>
-                                <span>{formatTempDetailed(s.dewpointC)}</span>
-                              </div>
-                            )}
-                            {s.relativeHumidity !== null && (
-                              <div className="detail-row">
-                                <span className="detail-label">Relative Humidity:</span>
-                                <span>{s.relativeHumidity.toFixed(1)}%</span>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="detail-section">
-                            <div className="detail-section-title">Wind</div>
-                            {s.windSpeedKt !== null ? (
-                              <>
-                                <div className="detail-row">
-                                  <span className="detail-label">Wind Speed:</span>
-                                  <span>{formatWindSpeed(s.windSpeedKt)}</span>
-                                </div>
-                                {s.windGustKt !== null && (
-                                  <div className="detail-row">
-                                    <span className="detail-label">Wind Gust:</span>
-                                    <span>{formatWindSpeed(s.windGustKt)}</span>
-                                  </div>
-                                )}
-                                {s.windDirDeg !== null && (
-                                  <div className="detail-row">
-                                    <span className="detail-label">Wind Direction:</span>
-                                    <span>
-                                      {Math.round(s.windDirDeg)}° ({formatWindDirection(s.windDirDeg)})
-                                    </span>
-                                  </div>
-                                )}
-                              </>
-                            ) : (
-                              <div className="detail-row">
-                                <span className="detail-label">Wind:</span>
-                                <span>Calm</span>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="detail-section">
-                            <div className="detail-section-title">Pressure</div>
-
-                            {s.altimeterInhg !== null && (
-                              <div className="detail-row">
-                                <span className="detail-label">Altimeter:</span>
-                                <span>{s.altimeterInhg.toFixed(2)} inHg</span>
-                              </div>
-                            )}
-
-                            {s.pressureMb !== null && (
-                              <div className="detail-row">
-                                <span className="detail-label">Pressure (MSL):</span>
-                                <span>
-                                  {s.pressureMb.toFixed(1)} mb
-                                  {s.pressureIsEstimated ? (
-                                    <span
-                                      style={{
-                                        marginLeft: 8,
-                                        padding: "2px 6px",
-                                        borderRadius: 6,
-                                        fontSize: 12,
-                                        fontWeight: 600,
-                                        border: "1px solid #f59e0b",
-                                        color: "#92400e",
-                                        background: "rgba(245, 158, 11, 0.12)",
-                                      }}
-                                      title="Sea-level pressure was computed from altimeter + elevation + temperature"
-                                    >
-                                      EST
-                                    </span>
-                                  ) : null}
-                                </span>
-                              </div>
-                            )}
-
-                            {s.pressureIsEstimated && s.pressureMb === null && (
-                              <div className="detail-row">
-                                <span className="detail-label">Pressure (MSL):</span>
-                                <span>Estimated</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {s.weatherCodes && (
-                            <div className="detail-section">
-                              <div className="detail-section-title">Weather</div>
-                              <div className="detail-row">
-                                <span className="detail-label">Weather Codes:</span>
-                                <span>{s.weatherCodes}</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {s.rawMetar && (
-                            <div className="detail-section">
-                              <div className="detail-section-title">Raw METAR</div>
-                              <div className="raw-metar">
-                                {s.rawMetar}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
+                            </button>
+                              );
+                            })()}
+                            <button
+                              type="button"
+                              className="hazard-item-action"
+                              onClick={() => setSelectedHazard(item)}
+                              aria-label={`Open ${item.label}${item.product_number ? ` ${item.product_number}` : ""} text`}
+                            >
+                              Text
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  )}
+                </section>
+              );
+            })}
+          </div>
         </aside>
+
       </main>
 
       {isOpsOpen && (
@@ -6147,49 +6546,49 @@ useEffect(() => {
                             <td>{opsSummary.freshness.mrms.rala.latest_time ? formatZulu(opsSummary.freshness.mrms.rala.latest_time) : "—"}</td>
                             <td>{opsSummary.freshness.mrms.rala.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rala.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.rala.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.rala.available_count} times</td>
+                            <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.rala)}</td>
                           </tr>
                           <tr>
                             <td>MRMS Composite</td>
                             <td>{opsSummary.freshness.mrms.composite.latest_time ? formatZulu(opsSummary.freshness.mrms.composite.latest_time) : "—"}</td>
                             <td>{opsSummary.freshness.mrms.composite.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.composite.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.composite.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.composite.available_count} times</td>
+                            <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.composite)}</td>
                           </tr>
                           <tr>
                             <td>MRMS EchoTop 18</td>
                             <td>{opsSummary.freshness.mrms.etop18.latest_time ? formatZulu(opsSummary.freshness.mrms.etop18.latest_time) : "—"}</td>
                             <td>{opsSummary.freshness.mrms.etop18.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.etop18.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.etop18.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.etop18.available_count} times</td>
+                            <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.etop18)}</td>
                           </tr>
                           <tr>
                             <td>MRMS RotationTrack LL 240</td>
                             <td>{opsSummary.freshness.mrms.rotationll240.latest_time ? formatZulu(opsSummary.freshness.mrms.rotationll240.latest_time) : "—"}</td>
                             <td>{opsSummary.freshness.mrms.rotationll240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rotationll240.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.rotationll240.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.rotationll240.available_count} times</td>
+                            <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.rotationll240)}</td>
                           </tr>
                           <tr>
                             <td>MRMS RotationTrack ML 240</td>
                             <td>{opsSummary.freshness.mrms.rotationml240.latest_time ? formatZulu(opsSummary.freshness.mrms.rotationml240.latest_time) : "—"}</td>
                             <td>{opsSummary.freshness.mrms.rotationml240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.rotationml240.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.rotationml240.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.rotationml240.available_count} times</td>
+                            <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.rotationml240)}</td>
                           </tr>
                           <tr>
                             <td>MRMS POSH</td>
                             <td>{opsSummary.freshness.mrms.posh.latest_time ? formatZulu(opsSummary.freshness.mrms.posh.latest_time) : "—"}</td>
                             <td>{opsSummary.freshness.mrms.posh.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.posh.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.posh.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.posh.available_count} times</td>
+                            <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.posh)}</td>
                           </tr>
                           <tr>
                             <td>MRMS MESH 240min</td>
                             <td>{opsSummary.freshness.mrms.mesh240.latest_time ? formatZulu(opsSummary.freshness.mrms.mesh240.latest_time) : "—"}</td>
                             <td>{opsSummary.freshness.mrms.mesh240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.mesh240.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.mesh240.status.toUpperCase()}</td>
-                            <td>{opsSummary.freshness.mrms.mesh240.available_count} times</td>
+                            <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.mesh240)}</td>
                           </tr>
                           <tr>
                             <td>WPC Surface</td>
@@ -6445,6 +6844,60 @@ useEffect(() => {
                   Include active legends in PNG download
                 </label>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedHazard && (
+        <div className="popup-overlay" onClick={() => setSelectedHazard(null)}>
+          <div className="popup-content" onClick={(e) => e.stopPropagation()}>
+            <div className="popup-header">
+              <div>
+                <h3>
+                  {selectedHazard.label}
+                  {selectedHazard.product_number ? ` ${selectedHazard.product_number}` : ""}
+                </h3>
+                <p>
+                  {formatDateTimeShort(selectedHazard.issued_at, displayTimeZone)} to{" "}
+                  {formatDateTimeShort(selectedHazard.ends_at, displayTimeZone)}
+                </p>
+              </div>
+              <button className="popup-close" onClick={() => setSelectedHazard(null)} aria-label="Close">
+                ×
+              </button>
+            </div>
+            <div className="popup-body">
+              {(() => {
+                const isWarning =
+                  selectedHazard.kind === "tornado_warning"
+                  || selectedHazard.kind === "severe_thunderstorm_warning"
+                  || selectedHazard.kind === "flash_flood_warning";
+                const hasCountyCoverage = isWarning && Array.isArray(selectedHazard.coverage_counties) && selectedHazard.coverage_counties.length > 0;
+                return (
+              <div className="detail-section">
+                <div className="detail-section-title">Coverage</div>
+                <div className="detail-row">
+                  <span className="detail-label">{hasCountyCoverage ? "Counties:" : "States:"}</span>
+                  <span className="detail-coverage-list">
+                    {hasCountyCoverage ? formatCoverageCounties(selectedHazard.coverage_counties) : formatStatesCompact(selectedHazard.states)}
+                  </span>
+                </div>
+              </div>
+                );
+              })()}
+              {selectedHazard.summary && (
+                <div className="detail-section">
+                  <div className="detail-section-title">Summary</div>
+                  <div>{selectedHazard.summary}</div>
+                </div>
+              )}
+              {selectedHazard.discussion_text && (
+                <div className="detail-section">
+                  <div className="detail-section-title">Discussion Text</div>
+                  <pre className="hazard-discussion-text">{selectedHazard.discussion_text}</pre>
+                </div>
+              )}
             </div>
           </div>
         </div>

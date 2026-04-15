@@ -29,8 +29,10 @@ from metar_fetcher import (
     fahrenheit_to_celsius,
     calculate_flight_rule,
 )
+from goes_service import GoesService
 from mrms_service import MrmsService
 from wpc_service import WpcSurfaceService
+from hazard_service import HazardService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -98,7 +100,9 @@ _metpy_wx_font_path_cache: Optional[Path] = None
 _metpy_wx_symbol_map_cache: Optional[Dict[str, str]] = None
 _data_root = Path(__file__).resolve().parent.parent / "data"
 _mrms_service = MrmsService(cache_root=_data_root / "mrms_cache")
+_goes_service = GoesService(cache_root=_data_root / "goes_cache")
 _wpc_service = WpcSurfaceService()
+_hazard_service = HazardService()
 _snapshot_db_path = _data_root / "snapshots.db"
 _app_started_at = datetime.now(timezone.utc)
 
@@ -672,6 +676,16 @@ async def periodic_update_task():
         await asyncio.sleep(300)  # 5 minutes
 
 
+async def periodic_hazard_update_task():
+    """Background task that refreshes active hazard products."""
+    while True:
+        try:
+            await asyncio.to_thread(_hazard_service.refresh)
+        except Exception as e:
+            logger.warning(f"Error refreshing hazard products: {e}")
+        await asyncio.sleep(300)
+
+
 async def warm_start_snapshot_history() -> None:
     """Load recent snapshot history without blocking API startup."""
     global _latest_obs, _last_update
@@ -696,14 +710,17 @@ async def lifespan(app: FastAPI):
     # Startup: start background task
     snapshot_task = asyncio.create_task(warm_start_snapshot_history())
     task = asyncio.create_task(periodic_update_task())
+    hazard_task = asyncio.create_task(periodic_hazard_update_task())
     logger.info("Started snapshot warm-start background task")
     logger.info("Started METAR update background task")
+    logger.info("Started hazard update background task")
 
     yield
     
     # Shutdown: cancel task
     snapshot_task.cancel()
     task.cancel()
+    hazard_task.cancel()
     try:
         await snapshot_task
     except asyncio.CancelledError:
@@ -712,7 +729,12 @@ async def lifespan(app: FastAPI):
         await task
     except asyncio.CancelledError:
         pass
+    try:
+        await hazard_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Stopped METAR update background task")
+    logger.info("Stopped hazard update background task")
 
 
 app = FastAPI(title="Wx Mesoanalysis API", lifespan=lifespan)
@@ -733,6 +755,7 @@ def health() -> dict:
         "last_update": _last_update.isoformat() if _last_update else None,
         "station_count": len(_latest_obs),
         "mrms_cache": _mrms_service.cache_usage(),
+        "goes_cache": _goes_service.cache_usage(),
     }
 
 
@@ -741,6 +764,7 @@ def _ops_collect_storage() -> dict:
         "data_root": _scan_path_stats(_data_root),
         "snapshots_db": _scan_path_stats(_snapshot_db_path),
         "mrms_cache_total": _scan_path_stats(_data_root / "mrms_cache"),
+        "goes_cache_total": _scan_path_stats(_data_root / "goes_cache"),
         "mrms_cache_rala": _scan_path_stats(_data_root / "mrms_cache" / "rala"),
         "mrms_cache_composite": _scan_path_stats(_data_root / "mrms_cache" / "composite"),
         "mrms_cache_etop18": _scan_path_stats(_data_root / "mrms_cache" / "etop18"),
@@ -768,16 +792,11 @@ def _ops_collect_freshness() -> dict:
     def mrms_product_freshness(product: str) -> dict:
         source = f"mrms:{product}"
         try:
-            times = _mrms_service.get_times(product)
-            latest = times[-1] if times else None
-            age = _age_minutes_from_iso(latest)
+            fresh = _mrms_service.get_freshness(product)
             with _diag_lock:
                 diag = dict(_diag_sources.get(source, {}))
             return {
-                "status": "ok",
-                "latest_time": latest,
-                "latest_age_minutes": age,
-                "available_count": len(times),
+                **fresh,
                 "last_success": diag.get("last_success"),
                 "last_failure": diag.get("last_failure"),
                 "last_error": diag.get("last_error"),
@@ -942,6 +961,19 @@ def wpc_surface_latest() -> dict:
     return wpc_surface(time=None)
 
 
+@app.get("/api/hazards/summary")
+def hazards_summary(time: Optional[str] = Query(default=None, description="Requested UTC ISO time")) -> dict:
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        return _hazard_service.get_summary(target)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to load hazards summary: {e}")
+
+
 @app.get("/api/metpy/wx_symbol_map")
 def metpy_wx_symbol_map() -> dict:
     try:
@@ -1088,6 +1120,7 @@ def mrms_times(
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.exception("MRMS times failed for product=%s", product)
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to fetch MRMS times: {e}")
 
@@ -1116,6 +1149,7 @@ def mrms_meta(
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.exception("MRMS metadata failed for product=%s time=%s", product, time)
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to fetch MRMS metadata: {e}")
 
@@ -1142,6 +1176,7 @@ def mrms_image(
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.exception("MRMS image failed for product=%s time=%s", product, time)
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to render MRMS image: {e}")
 
@@ -1189,6 +1224,7 @@ def mrms_tile(
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.exception("MRMS tile failed for product=%s time=%s z=%s x=%s y=%s", product, time, z, x, y)
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to render MRMS tile: {e}")
 
@@ -1236,5 +1272,178 @@ def mrms_value(
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.exception("MRMS value failed for product=%s time=%s lat=%s lon=%s", product, time, lat, lon)
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to sample MRMS value: {e}")
+
+
+@app.get("/api/goes/times")
+def goes_times(
+    product: str = Query(..., description="GOES product id"),
+) -> dict:
+    source = f"goes:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        out = {"product": product, "times": _goes_service.get_times(product)}
+        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+        return out
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("GOES times failed for product=%s", product)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to fetch GOES times: {e}")
+
+
+@app.get("/api/goes/meta")
+def goes_meta(
+    product: str = Query(..., description="GOES product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+    style: str = Query(default="enhanced", description="GOES render style"),
+) -> dict:
+    source = f"goes:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        out = _goes_service.get_meta(product, target, render_style=style)
+        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+        return out
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GOES metadata failed for product=%s time=%s", product, time)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to fetch GOES metadata: {e}")
+
+
+@app.get("/api/goes/image")
+def goes_image(
+    product: str = Query(..., description="GOES product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+    style: str = Query(default="enhanced", description="GOES render style"),
+) -> Response:
+    source = f"goes:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        png_path, meta = _goes_service.get_rendered_image(product, target, render_style=style)
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GOES image failed for product=%s time=%s", product, time)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to render GOES image: {e}")
+
+    if not png_path.exists():
+        _diag_mark_failure(source, FileNotFoundError("GOES image not found"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail="GOES image not found")
+
+    _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+    return Response(
+        content=png_path.read_bytes(),
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=60",
+            "X-GOES-Matched-Time": meta["matched_time"],
+            "X-GOES-Latest-Time": meta["latest_time"],
+            "X-GOES-Age-Minutes": str(meta["age_minutes"]),
+            "X-GOES-Stale-Warning": "1" if meta["stale_warning"] else "0",
+        },
+    )
+
+
+@app.get("/api/goes/tile/{z}/{x}/{y}.png")
+def goes_tile(
+    z: int,
+    x: int,
+    y: int,
+    product: str = Query(..., description="GOES product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+    style: str = Query(default="enhanced", description="GOES render style"),
+) -> Response:
+    source = f"goes:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        png_bytes, meta = _goes_service.get_tile_png(product, target, z, x, y, render_style=style)
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GOES tile failed for product=%s time=%s z=%s x=%s y=%s", product, time, z, x, y)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to render GOES tile: {e}")
+
+    _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=60",
+            "X-GOES-Matched-Time": meta["matched_time"],
+            "X-GOES-Latest-Time": meta["latest_time"],
+            "X-GOES-Age-Minutes": str(meta["age_minutes"]),
+            "X-GOES-Stale-Warning": "1" if meta["stale_warning"] else "0",
+        },
+    )
+
+
+@app.get("/api/goes/value")
+def goes_value(
+    product: str = Query(..., description="GOES product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+    lat: float = Query(..., description="Latitude"),
+    lon: float = Query(..., description="Longitude"),
+) -> dict:
+    source = f"goes:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    if lat < -90 or lat > 90 or lon < -180 or lon > 180:
+        _diag_mark_failure(source, ValueError("lat/lon out of range"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="lat/lon out of range")
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        out = _goes_service.get_value(product, target, lat=lat, lon=lon)
+        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+        return out
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GOES value failed for product=%s time=%s lat=%s lon=%s", product, time, lat, lon)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to sample GOES value: {e}")

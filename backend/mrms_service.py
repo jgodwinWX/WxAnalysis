@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from collections import OrderedDict
 from io import BytesIO
 import gzip
+import os
 import re
 import threading
 from urllib.parse import urljoin
@@ -35,6 +36,7 @@ class MrmsFile:
     valid_time: datetime
     filename: str
     url: str
+    source: str = "listing"
 
 
 @dataclass(frozen=True)
@@ -253,6 +255,8 @@ class MrmsService:
         self._grid_meta_cache: Dict[str, MrmsGridMeta] = {}
         self._latest_file_cache: Dict[str, Tuple[datetime, MrmsFile]] = {}
         self._frame_cache: "OrderedDict[str, MrmsFrameData]" = OrderedDict()
+        self._path_locks: Dict[str, threading.Lock] = {}
+        self._named_locks: Dict[str, threading.Lock] = {}
         self._lock = threading.Lock()
         self._last_cleanup: Optional[datetime] = None
 
@@ -291,6 +295,8 @@ class MrmsService:
             "requested_time": _iso_z(requested_time) if requested_time else None,
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "matched_source": matched.source,
+            "latest_source": latest.source,
             "match_status": selection.match_status,
             "match_delta_minutes": selection.match_delta_minutes,
             "match_tolerance_minutes": selection.match_tolerance_minutes,
@@ -365,6 +371,8 @@ class MrmsService:
         return png_bytes, {
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "matched_source": matched.source,
+            "latest_source": latest.source,
             "match_status": selection.match_status,
             "match_delta_minutes": selection.match_delta_minutes,
             "match_tolerance_minutes": selection.match_tolerance_minutes,
@@ -402,6 +410,8 @@ class MrmsService:
             "requested_time": _iso_z(requested_time) if requested_time else None,
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "matched_source": matched.source,
+            "latest_source": latest.source,
             "match_status": selection.match_status,
             "match_delta_minutes": selection.match_delta_minutes,
             "match_tolerance_minutes": selection.match_tolerance_minutes,
@@ -428,11 +438,31 @@ class MrmsService:
         return png_path, {
             "matched_time": _iso_z(matched.valid_time),
             "latest_time": _iso_z(latest.valid_time),
+            "matched_source": matched.source,
+            "latest_source": latest.source,
             "match_status": selection.match_status,
             "match_delta_minutes": selection.match_delta_minutes,
             "match_tolerance_minutes": selection.match_tolerance_minutes,
             "age_minutes": round(age_min, 1),
             "stale_warning": stale,
+        }
+
+    def get_freshness(self, product: str) -> dict:
+        cfg = self._product(product)
+        now = datetime.now(timezone.utc)
+        files = self._recent_files(cfg, now)
+        alias = self._latest_alias_file(cfg)
+        candidates = self._merge_candidates(files, alias)
+        selected = candidates[-1]
+        listing_latest = files[-1] if files else None
+        return {
+            "status": "ok",
+            "latest_time": _iso_z(selected.valid_time),
+            "latest_age_minutes": round((now - selected.valid_time).total_seconds() / 60.0, 1),
+            "latest_source": selected.source,
+            "listing_latest_time": _iso_z(listing_latest.valid_time) if listing_latest else None,
+            "alias_latest_time": _iso_z(alias.valid_time) if alias else None,
+            "available_count": len(files),
         }
 
     def cache_usage(self) -> dict:
@@ -472,18 +502,10 @@ class MrmsService:
         requested_time: Optional[datetime],
         now: Optional[datetime] = None,
     ) -> MatchSelection:
-        latest = files[-1]
+        alias = self._latest_alias_file(cfg)
+        candidates = self._merge_candidates(files, alias)
+        latest = candidates[-1]
         if requested_time is None:
-            latest_alias = self._latest_alias_file(cfg)
-            if latest_alias is not None:
-                return MatchSelection(
-                    matched=latest_alias,
-                    latest=latest_alias,
-                    requested_time=None,
-                    match_status="latest",
-                    match_delta_minutes=0.0,
-                    match_tolerance_minutes=None,
-                )
             return MatchSelection(
                 matched=latest,
                 latest=latest,
@@ -495,7 +517,7 @@ class MrmsService:
 
         tolerance_minutes = _bucket_match_tolerance_minutes(requested_time, now=now)
         matched = min(
-            files,
+            candidates,
             key=lambda f: (
                 abs((f.valid_time - requested_time).total_seconds()),
                 -f.valid_time.timestamp(),
@@ -515,6 +537,19 @@ class MrmsService:
             match_tolerance_minutes=tolerance_minutes,
         )
 
+    @staticmethod
+    def _merge_candidates(files: List[MrmsFile], alias: Optional[MrmsFile]) -> List[MrmsFile]:
+        by_key: Dict[Tuple[datetime, str], MrmsFile] = {}
+        for f in files:
+            by_key[(f.valid_time, f.filename)] = f
+        if alias is not None:
+            same_time = [key for key in by_key if key[0] == alias.valid_time]
+            if not same_time:
+                by_key[(alias.valid_time, alias.filename)] = alias
+        out = list(by_key.values())
+        out.sort(key=lambda f: (f.valid_time, 0 if f.source == "listing" else 1))
+        return out
+
     def _latest_alias_file(self, cfg: MrmsProductConfig) -> Optional[MrmsFile]:
         now = datetime.now(timezone.utc)
         with self._lock:
@@ -524,18 +559,27 @@ class MrmsService:
                 if (now - fetched_at).total_seconds() <= self.listing_ttl_seconds:
                     return f
 
-        alias_url = urljoin(cfg.base_url, cfg.latest_filename)
-        tmp_file = MrmsFile(valid_time=now, filename=cfg.latest_filename, url=alias_url)
-        try:
-            raw_path = self._ensure_raw_download(cfg, tmp_file)
-            grib_path = self._ensure_decompressed(raw_path)
-            valid = self._extract_valid_time(grib_path) or now
-            latest = MrmsFile(valid_time=valid, filename=cfg.latest_filename, url=alias_url)
+        with self._named_lock(f"alias:{cfg.id}"):
+            now = datetime.now(timezone.utc)
             with self._lock:
-                self._latest_file_cache[cfg.id] = (now, latest)
-            return latest
-        except Exception:
-            return None
+                cached = self._latest_file_cache.get(cfg.id)
+                if cached is not None:
+                    fetched_at, f = cached
+                    if (now - fetched_at).total_seconds() <= self.listing_ttl_seconds:
+                        return f
+
+            alias_url = urljoin(cfg.base_url, cfg.latest_filename)
+            tmp_file = MrmsFile(valid_time=now, filename=cfg.latest_filename, url=alias_url)
+            try:
+                raw_path = self._ensure_raw_download(cfg, tmp_file)
+                grib_path = self._ensure_decompressed(raw_path)
+                valid = self._extract_valid_time(grib_path) or now
+                latest = MrmsFile(valid_time=valid, filename=cfg.latest_filename, url=alias_url, source="alias")
+                with self._lock:
+                    self._latest_file_cache[cfg.id] = (now, latest)
+                return latest
+            except Exception:
+                return None
 
     def _list_remote(self, cfg: MrmsProductConfig) -> List[MrmsFile]:
         now = datetime.now(timezone.utc)
@@ -546,31 +590,40 @@ class MrmsService:
                 if (now - fetched_at).total_seconds() <= self.listing_ttl_seconds:
                     return files
 
-        resp = requests.get(cfg.base_url, timeout=25, headers={"User-Agent": "WxAnalysis/1.0"})
-        resp.raise_for_status()
-        html = resp.text
+        with self._named_lock(f"listing:{cfg.id}"):
+            now = datetime.now(timezone.utc)
+            with self._lock:
+                cached = self._listing_cache.get(cfg.id)
+                if cached is not None:
+                    fetched_at, files = cached
+                    if (now - fetched_at).total_seconds() <= self.listing_ttl_seconds:
+                        return files
 
-        hrefs = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
-        out: List[MrmsFile] = []
-        seen = set()
-        for href in hrefs:
-            name = href.split("/")[-1].strip()
-            if not name:
-                continue
-            if name in seen:
-                continue
-            if ".grib2" not in name.lower():
-                continue
-            t = self._parse_valid_time(name)
-            if t is None:
-                continue
-            seen.add(name)
-            out.append(MrmsFile(valid_time=t, filename=name, url=urljoin(cfg.base_url, href)))
+            resp = requests.get(cfg.base_url, timeout=25, headers={"User-Agent": "WxAnalysis/1.0"})
+            resp.raise_for_status()
+            html = resp.text
 
-        out.sort(key=lambda f: f.valid_time)
-        with self._lock:
-            self._listing_cache[cfg.id] = (now, out)
-        return out
+            hrefs = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
+            out: List[MrmsFile] = []
+            seen = set()
+            for href in hrefs:
+                name = href.split("/")[-1].strip()
+                if not name:
+                    continue
+                if name in seen:
+                    continue
+                if ".grib2" not in name.lower():
+                    continue
+                t = self._parse_valid_time(name)
+                if t is None:
+                    continue
+                seen.add(name)
+                out.append(MrmsFile(valid_time=t, filename=name, url=urljoin(cfg.base_url, href), source="listing"))
+
+            out.sort(key=lambda f: f.valid_time)
+            with self._lock:
+                self._listing_cache[cfg.id] = (now, out)
+            return out
 
     @staticmethod
     def _parse_valid_time(name: str) -> Optional[datetime]:
@@ -601,13 +654,16 @@ class MrmsService:
         stem = f.filename.replace(".gz", "")
         render_version = self._render_version_for_product(cfg.id)
         png_path = png_dir / f"{stem}_v{render_version}.png"
-        if png_path.exists():
-            return png_path
+        with self._path_lock(png_path):
+            if png_path.exists() and png_path.stat().st_size > 0:
+                return png_path
 
-        raw_path = self._ensure_raw_download(cfg, f)
-        grib_path = self._ensure_decompressed(raw_path)
-        meta = self._get_grid_meta(cfg, f)
-        self._render_product_to_png(grib_path, png_path, meta.row0_is_north, meta.col0_is_west, cfg.id)
+            raw_path = self._ensure_raw_download(cfg, f)
+            grib_path = self._ensure_decompressed(raw_path)
+            meta = self._get_grid_meta(cfg, f)
+            tmp_path = png_path.with_name(f"{png_path.name}.tmp-{threading.get_ident()}")
+            self._render_product_to_png(grib_path, tmp_path, meta.row0_is_north, meta.col0_is_west, cfg.id)
+            os.replace(tmp_path, png_path)
         return png_path
 
     def _tile_cache_path(
@@ -637,32 +693,54 @@ class MrmsService:
         raw_dir = self.cache_root / cfg.id / "raw" / f.valid_time.strftime("%Y%m%d")
         raw_dir.mkdir(parents=True, exist_ok=True)
         raw_path = raw_dir / f.filename
-        if raw_path.exists() and raw_path.stat().st_size > 0:
-            return raw_path
+        with self._path_lock(raw_path):
+            if raw_path.exists() and raw_path.stat().st_size > 0:
+                return raw_path
 
-        with requests.get(f.url, timeout=45, stream=True, headers={"User-Agent": "WxAnalysis/1.0"}) as r:
-            r.raise_for_status()
-            with raw_path.open("wb") as fp:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if not chunk:
-                        continue
-                    fp.write(chunk)
+            tmp_path = raw_path.with_name(f"{raw_path.name}.tmp-{threading.get_ident()}")
+            with requests.get(f.url, timeout=45, stream=True, headers={"User-Agent": "WxAnalysis/1.0"}) as r:
+                r.raise_for_status()
+                with tmp_path.open("wb") as fp:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        fp.write(chunk)
+            os.replace(tmp_path, raw_path)
         return raw_path
 
-    @staticmethod
-    def _ensure_decompressed(raw_path: Path) -> Path:
+    def _ensure_decompressed(self, raw_path: Path) -> Path:
         if not raw_path.name.endswith(".gz"):
             return raw_path
         out_path = raw_path.with_suffix("")
-        if out_path.exists() and out_path.stat().st_size > 0:
-            return out_path
-        with gzip.open(raw_path, "rb") as src, out_path.open("wb") as dst:
-            while True:
-                chunk = src.read(1024 * 1024)
-                if not chunk:
-                    break
-                dst.write(chunk)
+        with self._path_lock(out_path):
+            if out_path.exists() and out_path.stat().st_size > 0:
+                return out_path
+            tmp_path = out_path.with_name(f"{out_path.name}.tmp-{threading.get_ident()}")
+            with gzip.open(raw_path, "rb") as src, tmp_path.open("wb") as dst:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+            os.replace(tmp_path, out_path)
         return out_path
+
+    def _path_lock(self, path: Path) -> threading.Lock:
+        key = str(path)
+        with self._lock:
+            lock = self._path_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._path_locks[key] = lock
+            return lock
+
+    def _named_lock(self, key: str) -> threading.Lock:
+        with self._lock:
+            lock = self._named_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._named_locks[key] = lock
+            return lock
 
     @staticmethod
     def _extract_valid_time(grib_path: Path) -> Optional[datetime]:
@@ -696,9 +774,6 @@ class MrmsService:
             if cached is not None:
                 return cached
 
-        raw_path = self._ensure_raw_download(cfg, f)
-        grib_path = self._ensure_decompressed(raw_path)
-
         if pygrib is None:
             bounds = cfg.bbox_conus
             out = MrmsGridMeta(
@@ -711,11 +786,10 @@ class MrmsService:
                 self._grid_meta_cache[cache_key] = out
             return out
 
-        with pygrib.open(str(grib_path)) as grbs:
-            msg = grbs.message(1)
-            lats, lons = msg.latlons()
-            lats = np.asarray(lats, dtype=np.float64) if np is not None else lats
-            lons = np.asarray(lons, dtype=np.float64) if np is not None else lons
+        msg = self._open_grib_message(cfg, f)
+        lats, lons = msg.latlons()
+        lats = np.asarray(lats, dtype=np.float64) if np is not None else lats
+        lons = np.asarray(lons, dtype=np.float64) if np is not None else lons
 
         if np is not None:
             lons = ((lons + 180.0) % 360.0) - 180.0
@@ -764,13 +838,9 @@ class MrmsService:
                 self._frame_cache.move_to_end(cache_key)
                 return cached
 
-        raw_path = self._ensure_raw_download(cfg, f)
-        grib_path = self._ensure_decompressed(raw_path)
         meta = self._get_grid_meta(cfg, f)
-
-        with pygrib.open(str(grib_path)) as grbs:
-            msg = grbs.message(1)
-            vals = msg.values
+        msg = self._open_grib_message(cfg, f)
+        vals = msg.values
 
         arr = np.asarray(vals, dtype=np.float32)
         if np.ma.isMaskedArray(vals):
@@ -804,6 +874,41 @@ class MrmsService:
             while len(self._frame_cache) > 2:
                 self._frame_cache.popitem(last=False)
         return frame
+
+    def _open_grib_message(self, cfg: MrmsProductConfig, f: MrmsFile):
+        if pygrib is None:
+            raise RuntimeError("MRMS rendering dependencies missing; install pygrib")
+
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            raw_path = self._ensure_raw_download(cfg, f)
+            grib_path = self._ensure_decompressed(raw_path)
+            try:
+                with pygrib.open(str(grib_path)) as grbs:
+                    return grbs.message(1)
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    self._purge_cached_grib_files(raw_path)
+                    cache_key = f"{cfg.id}:{f.filename}"
+                    with self._lock:
+                        self._grid_meta_cache.pop(cache_key, None)
+                        self._frame_cache.pop(cache_key, None)
+                    continue
+                raise
+        raise last_error or RuntimeError("Unable to open MRMS GRIB message")
+
+    def _purge_cached_grib_files(self, raw_path: Path) -> None:
+        candidates = [raw_path]
+        if raw_path.name.endswith(".gz"):
+            candidates.append(raw_path.with_suffix(""))
+        for path in candidates:
+            with self._path_lock(path):
+                try:
+                    if path.exists():
+                        path.unlink()
+                except FileNotFoundError:
+                    pass
 
     @staticmethod
     def _tile_lonlat_bounds(z: int, x: int, y: int) -> Tuple[float, float, float, float]:

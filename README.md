@@ -51,6 +51,11 @@ The app has:
 - Live stale-frame warning (>30 min old)
 - Tile-based rendering capped at zoom level 10
 
+### GOES Satellite (single-select within GOES menu)
+- GOES-E CONUS: Band 2, Band 9, Band 13
+- GOES-W CONUS: Band 2, Band 9, Band 13
+- GOES and MRMS can be displayed simultaneously
+
 ### NWS Products
 - Latest WPC surface analysis
 - Front render options:
@@ -89,6 +94,7 @@ WxAnalysis/
 │   ├── vite.config.ts
 │   └── src/
 └── data/
+    ├── goes_cache/
     ├── mrms_cache/
     └── snapshots.db
 ```
@@ -127,9 +133,12 @@ From `backend/requirements.txt`:
 - `numpy`
 - `Pillow`
 - `pygrib`
+- `netCDF4`
+- `pyproj`
 
 Notes:
 - MRMS rendering requires `numpy`, `Pillow`, and `pygrib`.
+- GOES rendering requires `numpy`, `Pillow`, `netCDF4`, and `pyproj`.
 - Weather symbol font/glyph APIs require `metpy`.
 
 ## Frontend Setup (Vite/React)
@@ -200,6 +209,13 @@ npm run build
 - `GET /api/mrms/tile/{z}/{x}/{y}.png?product=...&time=...`
 - `GET /api/mrms/value?product=...&time=...&lat=...&lon=...`
 
+### GOES Satellite
+- `GET /api/goes/times?product=...`
+- `GET /api/goes/meta?product=...&time=...`
+- `GET /api/goes/image?product=...&time=...`
+- `GET /api/goes/tile/{z}/{x}/{y}.png?product=...&time=...`
+- `GET /api/goes/value?product=...&time=...&lat=...&lon=...`
+
 ### NWS/MetPy support
 - `GET /api/nws/wpc_surface/latest`
 - `GET /api/metpy/wx_symbol_map`
@@ -209,7 +225,7 @@ npm run build
 
 - This is a research/prototype tool, not an operational warning or aviation decision system.
 - Live-data services are external dependencies (IEM, NOAA MRMS, WPC); outages or delays upstream can affect display.
-- MRMS and objective analysis can be displayed together.
+- MRMS, GOES, and objective analysis can be displayed together.
 
 ## License
 

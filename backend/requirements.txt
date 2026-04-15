@@ -9,3 +9,5 @@ shapely
 numpy
 Pillow
 pygrib
+netCDF4
+pyproj
