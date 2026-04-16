@@ -54,7 +54,10 @@ The app has:
 ### GOES Satellite (single-select within GOES menu)
 - GOES-E CONUS: Band 2, Band 9, Band 13
 - GOES-W CONUS: Band 2, Band 9, Band 13
-- GOES and MRMS can be displayed simultaneously
+- GLM Lightning:
+  - GOES-E CONUS 5-minute Flash Extent Density (FED)
+  - GOES-W CONUS 5-minute Flash Extent Density (FED)
+- ABI GOES, GLM, and MRMS can be displayed simultaneously
 
 ### NWS Products
 - Latest WPC surface analysis
@@ -95,6 +98,7 @@ WxAnalysis/
 │   └── src/
 └── data/
     ├── goes_cache/
+    ├── glm_cache/
     ├── mrms_cache/
     └── snapshots.db
 ```
@@ -139,6 +143,7 @@ From `backend/requirements.txt`:
 Notes:
 - MRMS rendering requires `numpy`, `Pillow`, and `pygrib`.
 - GOES rendering requires `numpy`, `Pillow`, `netCDF4`, and `pyproj`.
+- GLM rendering requires `numpy`, `Pillow`, and `netCDF4`.
 - Weather symbol font/glyph APIs require `metpy`.
 
 ## Frontend Setup (Vite/React)
@@ -215,6 +220,13 @@ npm run build
 - `GET /api/goes/image?product=...&time=...`
 - `GET /api/goes/tile/{z}/{x}/{y}.png?product=...&time=...`
 - `GET /api/goes/value?product=...&time=...&lat=...&lon=...`
+
+### GLM Lightning
+- `GET /api/glm/times?product=...`
+- `GET /api/glm/meta?product=...&time=...`
+- `GET /api/glm/image?product=...&time=...`
+- `GET /api/glm/tile/{z}/{x}/{y}.png?product=...&time=...`
+- `GET /api/glm/value?product=...&time=...&lat=...&lon=...`
 
 ### NWS/MetPy support
 - `GET /api/nws/wpc_surface/latest`

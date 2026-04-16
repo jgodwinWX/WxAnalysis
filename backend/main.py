@@ -30,6 +30,7 @@ from metar_fetcher import (
     calculate_flight_rule,
 )
 from goes_service import GoesService
+from glm_service import GlmService
 from mrms_service import MrmsService
 from wpc_service import WpcSurfaceService
 from hazard_service import HazardService
@@ -101,6 +102,7 @@ _metpy_wx_symbol_map_cache: Optional[Dict[str, str]] = None
 _data_root = Path(__file__).resolve().parent.parent / "data"
 _mrms_service = MrmsService(cache_root=_data_root / "mrms_cache")
 _goes_service = GoesService(cache_root=_data_root / "goes_cache")
+_glm_service = GlmService(cache_root=_data_root / "glm_cache")
 _wpc_service = WpcSurfaceService()
 _hazard_service = HazardService()
 _snapshot_db_path = _data_root / "snapshots.db"
@@ -115,6 +117,8 @@ _diag_sources: Dict[str, Dict[str, Any]] = {
     "mrms:etop18": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "mrms:rotationll240": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "mrms:rotationml240": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
+    "glm:east-conus-fed": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
+    "glm:west-conus-fed": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
 }
 
 # Tune these:
@@ -756,6 +760,7 @@ def health() -> dict:
         "station_count": len(_latest_obs),
         "mrms_cache": _mrms_service.cache_usage(),
         "goes_cache": _goes_service.cache_usage(),
+        "glm_cache": _glm_service.cache_usage(),
     }
 
 
@@ -765,11 +770,14 @@ def _ops_collect_storage() -> dict:
         "snapshots_db": _scan_path_stats(_snapshot_db_path),
         "mrms_cache_total": _scan_path_stats(_data_root / "mrms_cache"),
         "goes_cache_total": _scan_path_stats(_data_root / "goes_cache"),
+        "glm_cache_total": _scan_path_stats(_data_root / "glm_cache"),
         "mrms_cache_rala": _scan_path_stats(_data_root / "mrms_cache" / "rala"),
         "mrms_cache_composite": _scan_path_stats(_data_root / "mrms_cache" / "composite"),
         "mrms_cache_etop18": _scan_path_stats(_data_root / "mrms_cache" / "etop18"),
         "mrms_cache_rotationll240": _scan_path_stats(_data_root / "mrms_cache" / "rotationll240"),
         "mrms_cache_rotationml240": _scan_path_stats(_data_root / "mrms_cache" / "rotationml240"),
+        "glm_cache_east": _scan_path_stats(_data_root / "glm_cache" / "east-conus-fed"),
+        "glm_cache_west": _scan_path_stats(_data_root / "glm_cache" / "west-conus-fed"),
     }
     return {"generated_at": _iso_z(datetime.now(timezone.utc)), "components": components}
 
@@ -793,6 +801,36 @@ def _ops_collect_freshness() -> dict:
         source = f"mrms:{product}"
         try:
             fresh = _mrms_service.get_freshness(product)
+            with _diag_lock:
+                diag = dict(_diag_sources.get(source, {}))
+            return {
+                **fresh,
+                "last_success": diag.get("last_success"),
+                "last_failure": diag.get("last_failure"),
+                "last_error": diag.get("last_error"),
+                "success": int(diag.get("success", 0)),
+                "failure": int(diag.get("failure", 0)),
+            }
+        except Exception as e:
+            with _diag_lock:
+                diag = dict(_diag_sources.get(source, {}))
+            return {
+                "status": "error",
+                "latest_time": None,
+                "latest_age_minutes": None,
+                "available_count": 0,
+                "error": str(e),
+                "last_success": diag.get("last_success"),
+                "last_failure": diag.get("last_failure"),
+                "last_error": diag.get("last_error"),
+                "success": int(diag.get("success", 0)),
+                "failure": int(diag.get("failure", 0)),
+            }
+
+    def glm_product_freshness(product: str) -> dict:
+        source = f"glm:{product}"
+        try:
+            fresh = _glm_service.get_freshness(product)
             with _diag_lock:
                 diag = dict(_diag_sources.get(source, {}))
             return {
@@ -864,6 +902,10 @@ def _ops_collect_freshness() -> dict:
             "posh": mrms_product_freshness("posh"),
             "mesh240": mrms_product_freshness("mesh240"),
         },
+        "glm": {
+            "east_conus_fed": glm_product_freshness("east-conus-fed"),
+            "west_conus_fed": glm_product_freshness("west-conus-fed"),
+        },
         "wpc": wpc_latest,
     }
 
@@ -885,6 +927,7 @@ def _ops_collect_health() -> dict:
         "last_update": _iso_z(_last_update) if _last_update else None,
         "station_count": len(_latest_obs),
         "mrms_cache": _mrms_service.cache_usage(),
+        "glm_cache": _glm_service.cache_usage(),
         "storage_total_bytes": int(((storage.get("components") or {}).get("data_root") or {}).get("bytes", 0)),
         "metar_latest_age_minutes": _age_minutes_from_iso(_iso_z(_last_update) if _last_update else None),
     }
@@ -925,6 +968,9 @@ def ops_summary() -> dict:
             "snapshot_near_match_minutes": SNAPSHOT_NEAR_MATCH_MIN,
             "mrms_stale_warn_minutes": 30,
             "mrms_tile_max_zoom": 10,
+            "glm_stale_warn_minutes": 45,
+            "glm_accumulation_minutes": 5,
+            "glm_tile_max_zoom": 9,
             "wpc_cycle_hours": 3,
             "wpc_issue_delay_minutes": 75,
             "wpc_overdue_grace_minutes": 30,
@@ -1447,3 +1493,172 @@ def goes_value(
         logger.exception("GOES value failed for product=%s time=%s lat=%s lon=%s", product, time, lat, lon)
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=503, detail=f"Failed to sample GOES value: {e}")
+
+
+@app.get("/api/glm/times")
+def glm_times(
+    product: str = Query(..., description="GLM product id"),
+) -> dict:
+    source = f"glm:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        out = {"product": product, "times": _glm_service.get_times(product)}
+        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+        return out
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("GLM times failed for product=%s", product)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to fetch GLM times: {e}")
+
+
+@app.get("/api/glm/meta")
+def glm_meta(
+    product: str = Query(..., description="GLM product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+) -> dict:
+    source = f"glm:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        out = _glm_service.get_meta(product, target)
+        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+        return out
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GLM metadata failed for product=%s time=%s", product, time)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to fetch GLM metadata: {e}")
+
+
+@app.get("/api/glm/image")
+def glm_image(
+    product: str = Query(..., description="GLM product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+) -> Response:
+    source = f"glm:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        png_path, meta = _glm_service.get_rendered_image(product, target)
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GLM image failed for product=%s time=%s", product, time)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to render GLM image: {e}")
+
+    if not png_path.exists():
+        _diag_mark_failure(source, FileNotFoundError("GLM image not found"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail="GLM image not found")
+
+    _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+    return Response(
+        content=png_path.read_bytes(),
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=60",
+            "X-GLM-Matched-Time": meta["matched_time"],
+            "X-GLM-Latest-Time": meta["latest_time"],
+            "X-GLM-Age-Minutes": str(meta["age_minutes"]),
+            "X-GLM-Stale-Warning": "1" if meta["stale_warning"] else "0",
+        },
+    )
+
+
+@app.get("/api/glm/tile/{z}/{x}/{y}.png")
+def glm_tile(
+    z: int,
+    x: int,
+    y: int,
+    product: str = Query(..., description="GLM product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+) -> Response:
+    source = f"glm:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        png_bytes, meta = _glm_service.get_tile_png(product, target, z, x, y)
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GLM tile failed for product=%s time=%s z=%s x=%s y=%s", product, time, z, x, y)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to render GLM tile: {e}")
+
+    _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=60",
+            "X-GLM-Matched-Time": meta["matched_time"],
+            "X-GLM-Latest-Time": meta["latest_time"],
+            "X-GLM-Age-Minutes": str(meta["age_minutes"]),
+            "X-GLM-Stale-Warning": "1" if meta["stale_warning"] else "0",
+        },
+    )
+
+
+@app.get("/api/glm/value")
+def glm_value(
+    product: str = Query(..., description="GLM product id"),
+    time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
+    lat: float = Query(..., description="Latitude"),
+    lon: float = Query(..., description="Longitude"),
+) -> dict:
+    source = f"glm:{(product or '').strip().lower()}"
+    t0 = pytime.perf_counter()
+    if lat < -90 or lat > 90 or lon < -180 or lon > 180:
+        _diag_mark_failure(source, ValueError("lat/lon out of range"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="lat/lon out of range")
+    try:
+        target = _parse_iso_z_optional(time)
+    except Exception:
+        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
+
+    try:
+        out = _glm_service.get_value(product, target, lat=lat, lon=lon)
+        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
+        return out
+    except ValueError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("GLM value failed for product=%s time=%s lat=%s lon=%s", product, time, lat, lon)
+        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
+        raise HTTPException(status_code=503, detail=f"Failed to sample GLM value: {e}")

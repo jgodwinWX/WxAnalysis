@@ -48,6 +48,7 @@ type TimeBucketId =
   | "latest";
 type MrmsField = "none" | "rala" | "composite" | "etop18" | "rotationll240" | "rotationml240" | "posh" | "mesh240";
 type GoesProduct = "none" | `${string}-${"02" | "09" | "13"}`;
+type GlmProduct = "none" | "east-conus-fed" | "west-conus-fed";
 type GoesRenderStyle = "grayscale" | "enhanced";
 type AnalysisFill = "none" | "windSpeed" | "ceiling" | "visibility" | "relativeHumidity";
 type FrontRenderStyle = "simple" | "classic";
@@ -153,6 +154,57 @@ type GoesValueResponse = {
   satellite: "east" | "west";
   sector: string;
   band: "02" | "09" | "13";
+  label: string;
+  requested_time: string | null;
+  matched_time: string;
+  latest_time: string;
+  matched_source?: string;
+  latest_source?: string;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
+  age_minutes: number;
+  stale_warning: boolean;
+  lat: number;
+  lon: number;
+  unit: string;
+  value?: number | null;
+  raw_value?: number | null;
+};
+
+type GlmMetaResponse = {
+  product: GlmProduct;
+  satellite: "east" | "west";
+  sector: string;
+  label: string;
+  unit: string;
+  accumulation_minutes: number;
+  requested_time: string | null;
+  matched_time: string;
+  latest_time: string;
+  matched_source?: string;
+  latest_source?: string;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
+  age_minutes: number;
+  stale_warning: boolean;
+  available_times: string[];
+  image_url: string;
+  tile_url_template?: string;
+  corners?: [[number, number], [number, number], [number, number], [number, number]];
+  bbox: {
+    min_lon: number;
+    min_lat: number;
+    max_lon: number;
+    max_lat: number;
+  };
+};
+
+type GlmValueResponse = {
+  product: GlmProduct;
+  satellite: "east" | "west";
+  sector: string;
   label: string;
   requested_time: string | null;
   matched_time: string;
@@ -353,6 +405,24 @@ type OpsSummaryResponse = {
         last_error?: string | null;
       };
     };
+    glm: {
+      east_conus_fed: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        latest_source?: string | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+      west_conus_fed: {
+        status: string;
+        latest_time: string | null;
+        latest_age_minutes: number | null;
+        latest_source?: string | null;
+        available_count: number;
+        last_error?: string | null;
+      };
+    };
     wpc: {
       status: string;
       valid_time?: string | null;
@@ -488,6 +558,17 @@ const GOES_BAND_OPTIONS = [
   { band: "13", label: "Band 13 Clean IR" },
   { band: "09", label: "Band 9 Water Vapor" },
 ] as const;
+const GLM_OPTIONS = [
+  { product: "east-conus-fed", label: "GOES-E CONUS 5-min FED" },
+  { product: "west-conus-fed", label: "GOES-W CONUS 5-min FED" },
+] as const;
+const GLM_LEGEND_ITEMS = [
+  { color: "#dc2626", label: "20+" },
+  { color: "#ff8c00", label: "10-19" },
+  { color: "#ffd700", label: "5-9" },
+  { color: "#4682b4", label: "2-4" },
+  { color: "#add8e6", label: "1" },
+];
 const GOES_VISIBLE_GRADIENT = "linear-gradient(to top, #000000 0%, #3a3a3a 20%, #7a7a7a 45%, #bdbdbd 70%, #ffffff 100%)";
 const GOES_IR_GRAYSCALE_GRADIENT = "linear-gradient(to top, #f5f5f5 0%, #d7d7d7 18%, #b0b0b0 34%, #7f7f7f 52%, #4f4f4f 72%, #1a1a1a 100%)";
 const GOES_IR_GRADIENT = "linear-gradient(to top, #f5f5f5 0%, #c8c8c8 12%, #969696 28%, #646464 40%, #00e6ff 48%, #0046ff 58%, #5ae600 68%, #fff500 78%, #dc0000 88%, #400060 96%, #121212 100%)";
@@ -561,6 +642,22 @@ function formatGoesCursorValue(product: GoesProduct, value: number | null): stri
   if (value == null || !Number.isFinite(value)) return "—";
   if (product.endsWith("-02")) return `${value.toFixed(1)}%`;
   return `${value.toFixed(1)}°C`;
+}
+
+function isValidGlmProduct(value: string | null): value is GlmProduct {
+  if (value == null) return false;
+  if (value === "none") return true;
+  return GLM_OPTIONS.some((option) => option.product === value);
+}
+
+function getGlmProductLabel(product: GlmProduct): string {
+  if (product === "none") return "GLM Lightning";
+  return GLM_OPTIONS.find((option) => option.product === product)?.label ?? "GLM Lightning";
+}
+
+function formatGlmCursorValue(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(1);
 }
 
 function makeReflectivityGradientCss() {
@@ -1979,6 +2076,10 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("goesProduct");
     return isValidGoesProduct(saved) ? saved : "none";
   });
+  const [glmProduct, setGlmProduct] = useState<GlmProduct>(() => {
+    const saved = localStorage.getItem("glmProduct");
+    return isValidGlmProduct(saved) ? saved : "none";
+  });
   const [goesRenderStyle, setGoesRenderStyle] = useState<GoesRenderStyle>(() => {
     const saved = localStorage.getItem("goesRenderStyle");
     return saved === "grayscale" || saved === "enhanced" ? saved : "enhanced";
@@ -1989,10 +2090,14 @@ const densityPx = useMemo(() => {
   const [goesMeta, setGoesMeta] = useState<GoesMetaResponse | null>(null);
   const [goesError, setGoesError] = useState<string | null>(null);
   const [goesCursorValue, setGoesCursorValue] = useState<number | null>(null);
+  const [glmMeta, setGlmMeta] = useState<GlmMetaResponse | null>(null);
+  const [glmError, setGlmError] = useState<string | null>(null);
+  const [glmCursorValue, setGlmCursorValue] = useState<number | null>(null);
   const [obsLoadState, setObsLoadState] = useState<LoadStageState>("loading");
   const [analysisLoadState, setAnalysisLoadState] = useState<LoadStageState>("idle");
   const [mrmsLoadState, setMrmsLoadState] = useState<LoadStageState>("idle");
   const [goesLoadState, setGoesLoadState] = useState<LoadStageState>("idle");
+  const [glmLoadState, setGlmLoadState] = useState<LoadStageState>("idle");
   const [hazardLoadState, setHazardLoadState] = useState<LoadStageState>("loading");
   const [wpcLoadState, setWpcLoadState] = useState<LoadStageState>("idle");
   const [nwsOverlays, setNwsOverlays] = useState<NwsOverlayState>(() => {
@@ -2919,6 +3024,12 @@ const densityPx = useMemo(() => {
     if (nwsOverlays.wpcSurface) {
       cards.push({ title: "WPC Surface Analysis", items: WPC_LEGEND_ITEMS });
     }
+    if (glmProduct !== "none") {
+      cards.push({
+        title: `${getGlmProductLabel(glmProduct)} (flashes / 5 min)`,
+        items: GLM_LEGEND_ITEMS,
+      });
+    }
     return cards;
   }, [
     analysisFill,
@@ -2928,6 +3039,7 @@ const densityPx = useMemo(() => {
     visibilityFillLegend,
     relativeHumidityLegend,
     mrmsField,
+    glmProduct,
     nwsOverlays.wpcSurface,
   ]);
 
@@ -3088,6 +3200,12 @@ const densityPx = useMemo(() => {
         value: formatGoesCursorValue(goesProduct, goesCursorValue),
       });
     }
+    if (glmProduct !== "none") {
+      rows.push({
+        label: `${getGlmProductLabel(glmProduct)} (flashes / 5 min)`,
+        value: formatGlmCursorValue(glmCursorValue),
+      });
+    }
 
     return rows;
   }, [
@@ -3102,6 +3220,8 @@ const densityPx = useMemo(() => {
     mrmsCursorValue,
     goesProduct,
     goesCursorValue,
+    glmProduct,
+    glmCursorValue,
   ]);
 
   const selectedTimeDisplayIso = useMemo(
@@ -3257,6 +3377,77 @@ const densityPx = useMemo(() => {
     cursorProbe?.lng,
   ]);
 
+  const refreshGlmMeta = useCallback(async () => {
+    if (glmProduct === "none") {
+      setGlmMeta(null);
+      setGlmError(null);
+      setGlmLoadState("idle");
+      return;
+    }
+    setGlmLoadState("loading");
+    try {
+      const params = new URLSearchParams({ product: glmProduct });
+      if (requestedTimeIso) params.set("time", requestedTimeIso);
+      const res = await fetch(`/api/glm/meta?${params.toString()}`);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as GlmMetaResponse;
+      setGlmMeta(data);
+      setGlmError(null);
+      setGlmLoadState("ready");
+    } catch (e: any) {
+      setGlmMeta(null);
+      setGlmError(e?.message ?? "Failed to load GLM metadata");
+      setGlmLoadState("error");
+    }
+  }, [glmProduct, requestedTimeIso]);
+
+  useEffect(() => {
+    refreshGlmMeta();
+  }, [refreshGlmMeta]);
+
+  useEffect(() => {
+    if (!showCursorDiagnostics || glmProduct === "none" || !glmMeta || !cursorProbe) {
+      setGlmCursorValue(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          product: glmProduct,
+          time: glmMeta.matched_time,
+          lat: cursorProbe.lat.toFixed(5),
+          lon: cursorProbe.lng.toFixed(5),
+        });
+        const res = await fetch(`/api/glm/value?${params.toString()}`, { signal: controller.signal });
+        if (!res.ok) {
+          setGlmCursorValue(null);
+          return;
+        }
+        const data = (await res.json()) as GlmValueResponse;
+        const sampled = data.value;
+        setGlmCursorValue(sampled == null || !Number.isFinite(sampled) ? null : sampled);
+      } catch (e: any) {
+        if (e?.name !== "AbortError") setGlmCursorValue(null);
+      }
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    showCursorDiagnostics,
+    glmProduct,
+    glmMeta,
+    cursorProbe?.lat,
+    cursorProbe?.lng,
+  ]);
+
   const refreshWpcSurface = useCallback(async () => {
     if (!nwsOverlays.wpcSurface) {
       setWpcSurface(null);
@@ -3380,6 +3571,25 @@ const densityPx = useMemo(() => {
       }
     }
 
+    if (glmProduct !== "none") {
+      const label = getGlmProductLabel(glmProduct);
+      if (glmMeta) {
+        statuses.push({
+          key: `glm-${glmProduct}`,
+          label,
+          state: "matched",
+          detail: describeMatchDetail(glmMeta, displayTimeZone),
+        });
+      } else if (glmError) {
+        statuses.push({
+          key: `glm-${glmProduct}`,
+          label,
+          state: "dropped",
+          detail: glmError,
+        });
+      }
+    }
+
     if (nwsOverlays.wpcSurface) {
       if (wpcSurface?.matched_time) {
         statuses.push({
@@ -3417,7 +3627,7 @@ const densityPx = useMemo(() => {
     }
 
     return statuses;
-  }, [displayTimeZone, goesError, goesMeta, goesProduct, hazardError, lastUpdate, mrmsError, mrmsField, mrmsMeta, nwsOverlays.wpcSurface, obsMatchMeta, wpcError, wpcSurface]);
+  }, [displayTimeZone, glmError, glmMeta, glmProduct, goesError, goesMeta, goesProduct, hazardError, lastUpdate, mrmsError, mrmsField, mrmsMeta, nwsOverlays.wpcSurface, obsMatchMeta, wpcError, wpcSurface]);
 
   const loadingStages = useMemo(() => {
     const stages: Array<{ key: string; label: string; state: LoadStageState }> = [
@@ -3434,11 +3644,14 @@ const densityPx = useMemo(() => {
     if (goesProduct !== "none") {
       stages.push({ key: "goes", label: getGoesProductLabel(goesProduct), state: goesLoadState });
     }
+    if (glmProduct !== "none") {
+      stages.push({ key: "glm", label: getGlmProductLabel(glmProduct), state: glmLoadState });
+    }
     if (nwsOverlays.wpcSurface) {
       stages.push({ key: "wpc", label: "WPC Surface", state: wpcLoadState });
     }
     return stages;
-  }, [obsLoadState, hazardLoadState, mapLoaded, anyAnalysisLikeOverlayOn, analysisLoadState, mrmsField, mrmsLoadState, goesProduct, goesLoadState, nwsOverlays.wpcSurface, wpcLoadState]);
+  }, [obsLoadState, hazardLoadState, mapLoaded, anyAnalysisLikeOverlayOn, analysisLoadState, mrmsField, mrmsLoadState, goesProduct, goesLoadState, glmProduct, glmLoadState, nwsOverlays.wpcSurface, wpcLoadState]);
 
   const loadingProgress = useMemo(() => {
     const total = loadingStages.length;
@@ -3524,6 +3737,17 @@ const densityPx = useMemo(() => {
     return `${base}${sep}cb=${encodeURIComponent(goesMeta.matched_time)}`;
   }, [goesProduct, goesMeta, goesRenderStyle]);
 
+  const glmTileTemplate = useMemo(() => {
+    if (glmProduct === "none" || !glmMeta) return null;
+    const base =
+      glmMeta.tile_url_template ??
+      `/api/glm/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(glmProduct)}&time=${encodeURIComponent(
+        glmMeta.matched_time
+      )}`;
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}cb=${encodeURIComponent(glmMeta.matched_time)}`;
+  }, [glmProduct, glmMeta]);
+
   const mrmsRasterLayer: any = useMemo(
     () => ({
       id: "mrms-raster-layer",
@@ -3543,6 +3767,20 @@ const densityPx = useMemo(() => {
       id: "goes-raster-layer",
       type: "raster",
       source: "goes-raster-tiles",
+      maxzoom: 9,
+      paint: {
+        "raster-opacity": 0.82,
+        "raster-resampling": "nearest",
+      },
+    }),
+    []
+  );
+
+  const glmRasterLayer: any = useMemo(
+    () => ({
+      id: "glm-raster-layer",
+      source: "glm-raster-tiles",
+      type: "raster",
       maxzoom: 9,
       paint: {
         "raster-opacity": 0.82,
@@ -5367,6 +5605,10 @@ useEffect(() => {
 }, [goesProduct]);
 
 useEffect(() => {
+  localStorage.setItem("glmProduct", glmProduct);
+}, [glmProduct]);
+
+useEffect(() => {
   localStorage.setItem("goesRenderStyle", goesRenderStyle);
 }, [goesRenderStyle]);
 
@@ -5729,6 +5971,33 @@ useEffect(() => {
                       </div>
                     </details>
                   ))}
+                  <details className="view-submenu goes-submenu">
+                    <summary>GLM Lightning</summary>
+                    <div className="view-submenu-content goes-submenu-content">
+                      <div className="goes-submenu-options">
+                        <label>
+                          <input
+                            type="radio"
+                            name="glm-product"
+                            checked={glmProduct === "none"}
+                            onChange={() => setGlmProduct("none")}
+                          />
+                          Off
+                        </label>
+                        {GLM_OPTIONS.map((option) => (
+                          <label key={option.product}>
+                            <input
+                              type="radio"
+                              name="glm-product"
+                              checked={glmProduct === option.product}
+                              onChange={() => setGlmProduct(option.product)}
+                            />
+                            {option.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </details>
                 </div>
               </details>
             </div>
@@ -5992,6 +6261,20 @@ useEffect(() => {
                 MRMS {getMrmsProductLabel(mrmsField)} unavailable: {mrmsError}
               </div>
             )}
+            {glmProduct !== "none" && glmMeta?.stale_warning && (
+              <div className="mrms-warning-overlay" style={{ top: mrmsField !== "none" && mrmsMeta?.stale_warning ? 44 : undefined }}>
+                GLM {getGlmProductLabel(glmProduct)} warning: matched frame is {Math.round(glmMeta.age_minutes)} minutes old
+                ({glmMeta.matched_time ? formatZulu(glmMeta.matched_time) : "—"}).
+              </div>
+            )}
+            {glmProduct !== "none" && glmError && (
+              <div
+                className="mrms-warning-overlay mrms-warning-error"
+                style={{ top: mrmsField !== "none" || (glmMeta?.stale_warning ?? false) ? 44 : undefined }}
+              >
+                GLM {getGlmProductLabel(glmProduct)} unavailable: {glmError}
+              </div>
+            )}
             {nwsOverlays.wpcSurface && wpcSurface?.stale_warning && (
               <div className="mrms-warning-overlay">
                 WPC surface analysis warning: latest parsed valid time is {wpcSurface.valid_time ? formatZulu(wpcSurface.valid_time) : "unknown"}
@@ -6230,6 +6513,17 @@ useEffect(() => {
                   tileSize={256}
                 >
                   <Layer {...goesRasterLayer} />
+                </Source>
+              )}
+              {glmProduct !== "none" && glmTileTemplate && (
+                <Source
+                  id="glm-raster-tiles"
+                  key={glmTileTemplate}
+                  type="raster"
+                  tiles={[glmTileTemplate]}
+                  tileSize={256}
+                >
+                  <Layer {...glmRasterLayer} />
                 </Source>
               )}
               {mrmsField !== "none" && mrmsTileTemplate && (
@@ -6589,6 +6883,20 @@ useEffect(() => {
                             <td>{opsSummary.freshness.mrms.mesh240.latest_age_minutes == null ? "—" : `${opsSummary.freshness.mrms.mesh240.latest_age_minutes} min`}</td>
                             <td>{opsSummary.freshness.mrms.mesh240.status.toUpperCase()}</td>
                             <td>{formatMrmsFreshnessNotes(opsSummary.freshness.mrms.mesh240)}</td>
+                          </tr>
+                          <tr>
+                            <td>GLM GOES-E CONUS FED</td>
+                            <td>{opsSummary.freshness.glm.east_conus_fed.latest_time ? formatZulu(opsSummary.freshness.glm.east_conus_fed.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.glm.east_conus_fed.latest_age_minutes == null ? "—" : `${opsSummary.freshness.glm.east_conus_fed.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.glm.east_conus_fed.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.glm.east_conus_fed.available_count} frames</td>
+                          </tr>
+                          <tr>
+                            <td>GLM GOES-W CONUS FED</td>
+                            <td>{opsSummary.freshness.glm.west_conus_fed.latest_time ? formatZulu(opsSummary.freshness.glm.west_conus_fed.latest_time) : "—"}</td>
+                            <td>{opsSummary.freshness.glm.west_conus_fed.latest_age_minutes == null ? "—" : `${opsSummary.freshness.glm.west_conus_fed.latest_age_minutes} min`}</td>
+                            <td>{opsSummary.freshness.glm.west_conus_fed.status.toUpperCase()}</td>
+                            <td>{opsSummary.freshness.glm.west_conus_fed.available_count} frames</td>
                           </tr>
                           <tr>
                             <td>WPC Surface</td>
