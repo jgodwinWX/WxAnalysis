@@ -51,6 +51,7 @@ type GoesProduct = "none" | `${string}-${"02" | "09" | "13"}`;
 type GlmProduct = "none" | "east-conus-fed" | "west-conus-fed";
 type GoesRenderStyle = "grayscale" | "enhanced";
 type AnalysisFill = "none" | "windSpeed" | "ceiling" | "visibility" | "relativeHumidity";
+type RrfsChartId = "none" | "925mb" | "850mb" | "700mb" | "500mb" | "300mb";
 type FrontRenderStyle = "simple" | "classic";
 type HazardMenuGroup =
   | "convectiveWatches"
@@ -221,6 +222,46 @@ type GlmValueResponse = {
   unit: string;
   value?: number | null;
   raw_value?: number | null;
+};
+
+type RrfsChartMetaResponse = {
+  chart: Exclude<RrfsChartId, "none">;
+  label: string;
+  requested_time: string;
+  matched_time: string;
+  latest_time: string;
+  valid_time: string;
+  init_time: string;
+  forecast_hour: number;
+  match_status?: string;
+  match_delta_minutes?: number;
+  match_tolerance_minutes?: number | null;
+  rounded_valid_time?: string;
+  age_minutes: number;
+  stale_warning: boolean;
+  grid_spacing_km: number;
+  source_key: string;
+};
+
+type RrfsChartResponse = RrfsChartMetaResponse & {
+  contours: GeoJsonFeatureCollection;
+  winds: GeoJsonFeatureCollection;
+  wind_fill?: GeoJsonFeatureCollection;
+  rh_fill?: GeoJsonFeatureCollection;
+  vort_fill?: GeoJsonFeatureCollection;
+};
+
+type RrfsChartValueResponse = RrfsChartMetaResponse & {
+  lat: number;
+  lon: number;
+  height_m?: number | null;
+  temperature_c?: number | null;
+  dewpoint_c?: number | null;
+  relative_humidity_pct?: number | null;
+  absolute_vorticity_s1?: number | null;
+  divergence_s1?: number | null;
+  wind_dir_deg?: number | null;
+  wind_speed_kt?: number | null;
 };
 
 type GeoJsonFeatureCollection = {
@@ -569,6 +610,41 @@ const GLM_LEGEND_ITEMS = [
   { color: "#4682b4", label: "2-4" },
   { color: "#add8e6", label: "1" },
 ];
+const RRFS_850_WIND_FILL_BINS_KT = [30, 35, 40, 45, 50, 55, 60, 65, 70, Number.POSITIVE_INFINITY];
+const RRFS_850_WIND_FILL_COLORS = [
+  "#0d0887",
+  "#5b02a3",
+  "#8b0aa5",
+  "#b12a90",
+  "#cc4778",
+  "#e16462",
+  "#f1834b",
+  "#fca636",
+  "#f0f921",
+];
+const RRFS_300_WIND_FILL_BINS_KT = [60, 90, 120, 150, 180, 210, Number.POSITIVE_INFINITY];
+const RRFS_300_WIND_FILL_COLORS = [
+  "#0d0887",
+  "#8b0aa5",
+  "#cc4778",
+  "#f1834b",
+  "#fca636",
+  "#f0f921",
+];
+const RRFS_700_RH_FILL_BINS_PCT = [75, 80, 85, 90, 95, 100, Number.POSITIVE_INFINITY];
+const RRFS_700_RH_FILL_COLORS = [
+  "#dcfce7",
+  "#bbf7d0",
+  "#86efac",
+  "#4ade80",
+  "#22c55e",
+  "#166534",
+];
+const RRFS_500_VORT_MASK_MIN = 15;
+const RRFS_500_VORT_MIN = 5;
+const RRFS_500_VORT_MAX = 45;
+const RRFS_500_VORT_STRETCH_EXPONENT = 0.65;
+const RRFS_500_VORT_GRADIENT = "linear-gradient(to top, #000004 0%, #180f3d 18%, #440f76 36%, #721f81 52%, #9e2f7f 66%, #cd4071 79%, #f1605d 90%, #fd9668 96%, #feca8d 100%)";
 const GOES_VISIBLE_GRADIENT = "linear-gradient(to top, #000000 0%, #3a3a3a 20%, #7a7a7a 45%, #bdbdbd 70%, #ffffff 100%)";
 const GOES_IR_GRAYSCALE_GRADIENT = "linear-gradient(to top, #f5f5f5 0%, #d7d7d7 18%, #b0b0b0 34%, #7f7f7f 52%, #4f4f4f 72%, #1a1a1a 100%)";
 const GOES_IR_GRADIENT = "linear-gradient(to top, #f5f5f5 0%, #c8c8c8 12%, #969696 28%, #646464 40%, #00e6ff 48%, #0046ff 58%, #5ae600 68%, #fff500 78%, #dc0000 88%, #400060 96%, #121212 100%)";
@@ -1229,6 +1305,84 @@ function formatCoverageCountiesCompact(counties: string[] | null | undefined): s
   return text;
 }
 
+function getRrfsChartLabel(chart: RrfsChartId | null | undefined): string {
+  if (chart === "925mb") return "RRFS 925 MB Analysis";
+  if (chart === "850mb") return "RRFS 850 MB Analysis";
+  if (chart === "700mb") return "RRFS 700 MB Analysis";
+  if (chart === "500mb") return "RRFS 500 MB Analysis";
+  if (chart === "300mb") return "RRFS 300 MB Analysis";
+  return "RRFS Analysis";
+}
+
+function getRrfsLevelLabel(chart: Exclude<RrfsChartId, "none">): string {
+  if (chart === "925mb") return "925";
+  if (chart === "850mb") return "850";
+  if (chart === "700mb") return "700";
+  if (chart === "500mb") return "500";
+  return "300";
+}
+
+function getRrfsHeightInterval(chart: Exclude<RrfsChartId, "none">): number {
+  if (chart === "500mb") return 60;
+  if (chart === "300mb") return 120;
+  return 30;
+}
+
+function rrfs850WindFillColor(speedKt: number): string | null {
+  if (!Number.isFinite(speedKt) || speedKt < 30) return null;
+  const upperBounds = RRFS_850_WIND_FILL_BINS_KT.slice(1);
+  for (let i = 0; i < upperBounds.length; i++) {
+    if (speedKt < upperBounds[i]) return RRFS_850_WIND_FILL_COLORS[i];
+  }
+  return RRFS_850_WIND_FILL_COLORS[RRFS_850_WIND_FILL_COLORS.length - 1] ?? null;
+}
+
+function rrfs300WindFillColor(speedKt: number): string | null {
+  if (!Number.isFinite(speedKt) || speedKt < 60) return null;
+  const upperBounds = RRFS_300_WIND_FILL_BINS_KT.slice(1);
+  for (let i = 0; i < upperBounds.length; i++) {
+    if (speedKt < upperBounds[i]) return RRFS_300_WIND_FILL_COLORS[i];
+  }
+  return RRFS_300_WIND_FILL_COLORS[RRFS_300_WIND_FILL_COLORS.length - 1] ?? null;
+}
+
+function rrfs700RhFillColor(relativeHumidityPct: number): string | null {
+  if (!Number.isFinite(relativeHumidityPct) || relativeHumidityPct < 75) return null;
+  const upperBounds = RRFS_700_RH_FILL_BINS_PCT.slice(1);
+  for (let i = 0; i < upperBounds.length; i++) {
+    if (relativeHumidityPct < upperBounds[i]) return RRFS_700_RH_FILL_COLORS[i];
+  }
+  return RRFS_700_RH_FILL_COLORS[RRFS_700_RH_FILL_COLORS.length - 1] ?? null;
+}
+
+function rrfs500VortFillColor(vorticityS1: number): string | null {
+  if (!Number.isFinite(vorticityS1)) return null;
+  const scaled = vorticityS1 * 1e5;
+  if (scaled < RRFS_500_VORT_MASK_MIN) return null;
+  const normalized = Math.max(0, Math.min(1, (scaled - RRFS_500_VORT_MIN) / (RRFS_500_VORT_MAX - RRFS_500_VORT_MIN)));
+  const t = Math.pow(normalized, RRFS_500_VORT_STRETCH_EXPONENT);
+  const stops = [
+    { t: 0.0, c: [0, 0, 4] },
+    { t: 0.18, c: [24, 15, 61] },
+    { t: 0.36, c: [68, 15, 118] },
+    { t: 0.52, c: [114, 31, 129] },
+    { t: 0.66, c: [158, 47, 127] },
+    { t: 0.79, c: [205, 64, 113] },
+    { t: 0.9, c: [241, 96, 93] },
+    { t: 0.96, c: [253, 150, 104] },
+    { t: 1.0, c: [254, 202, 141] },
+  ];
+  let i = 0;
+  while (i < stops.length - 1 && t > stops[i + 1].t) i++;
+  const a = stops[i];
+  const b = stops[Math.min(i + 1, stops.length - 1)];
+  const localT = (t - a.t) / Math.max(1e-9, b.t - a.t);
+  const r = Math.round(a.c[0] + (b.c[0] - a.c[0]) * localT);
+  const g = Math.round(a.c[1] + (b.c[1] - a.c[1]) * localT);
+  const bl = Math.round(a.c[2] + (b.c[2] - a.c[2]) * localT);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${bl.toString(16).padStart(2, "0")}`;
+}
+
 // Format the sky conditions as "CLR///" or "SCT015"
 function formatSky(sky: SkyCondition[]) {
   return sky
@@ -1690,9 +1844,9 @@ function App() {
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [viewState, setViewState] = useState<ViewState>({
-    longitude: -94.5928,
-    latitude: 39.1232,
-    zoom: 6,
+    longitude: -97.5,
+    latitude: 38.5,
+    zoom: 3.35,
     bearing: 0,
     pitch: 0,
     padding: { top: 0, left: 0, bottom: 0, right: 0 },
@@ -1723,12 +1877,18 @@ function App() {
   const wpcFrontCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisLabelCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rrfsFillCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rrfsContourCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rrfsWindCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const analysisGridRef = useRef<AnalysisGridStore>({});
   const animationFrameRef = useRef<number | null>(null);
   const analysisAnimationFrameRef = useRef<number | null>(null);
   const analysisThrottleTimeoutRef = useRef<number | null>(null);
   const analysisLastDrawRef = useRef<number>(0);
   const wpcFrontAnimationFrameRef = useRef<number | null>(null);
+  const rrfsAnimationFrameRef = useRef<number | null>(null);
+  const rrfsThrottleTimeoutRef = useRef<number | null>(null);
+  const rrfsLastDrawRef = useRef<number>(0);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursorProbe, setCursorProbe] = useState<{ x: number; y: number; lng: number; lat: number } | null>(null);
   const obsById = useMemo(() => {
@@ -2053,6 +2213,19 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("cursorReadoutDiagnostics");
     return saved === null ? false : saved === "true";
   });
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        setOpenHeaderMenu(null);
+        return;
+      }
+      if (target.closest(".analysis-control, .geography-control")) return;
+      setOpenHeaderMenu(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
 
   const [displayTimeZone, setDisplayTimeZone] = useState<DisplayTimeZone>(() => {
     const saved = localStorage.getItem("displayTimeZone");
@@ -2080,6 +2253,24 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("glmProduct");
     return isValidGlmProduct(saved) ? saved : "none";
   });
+  const [rrfsChart, setRrfsChart] = useState<RrfsChartId>(() => {
+    const saved = localStorage.getItem("rrfsContours");
+    if (saved) {
+      try {
+        if (saved === "\"925mb\"" || saved === "\"850mb\"" || saved === "\"700mb\"" || saved === "\"500mb\"" || saved === "\"300mb\"" || saved === "\"none\"") {
+          const parsed = JSON.parse(saved) as RrfsChartId;
+          return parsed;
+        }
+        const parsed = JSON.parse(saved) as Partial<Record<"analysis925mb" | "analysis850mb" | "analysis700mb" | "analysis500mb" | "analysis300mb" | "t2m", boolean>>;
+        if (parsed.analysis300mb === true) return "300mb";
+        if (parsed.analysis500mb === true) return "500mb";
+        if (parsed.analysis700mb === true) return "700mb";
+        if (parsed.analysis850mb === true) return "850mb";
+        if (parsed.analysis925mb === true || parsed.t2m === true) return "925mb";
+      } catch {}
+    }
+    return "none";
+  });
   const [goesRenderStyle, setGoesRenderStyle] = useState<GoesRenderStyle>(() => {
     const saved = localStorage.getItem("goesRenderStyle");
     return saved === "grayscale" || saved === "enhanced" ? saved : "enhanced";
@@ -2093,11 +2284,18 @@ const densityPx = useMemo(() => {
   const [glmMeta, setGlmMeta] = useState<GlmMetaResponse | null>(null);
   const [glmError, setGlmError] = useState<string | null>(null);
   const [glmCursorValue, setGlmCursorValue] = useState<number | null>(null);
+  const [rrfsMeta, setRrfsMeta] = useState<RrfsChartMetaResponse | null>(null);
+  const [rrfsContoursGeoJson, setRrfsContoursGeoJson] = useState<GeoJsonFeatureCollection | null>(null);
+  const [rrfsWindsGeoJson, setRrfsWindsGeoJson] = useState<GeoJsonFeatureCollection | null>(null);
+  const [rrfsFillGeoJson, setRrfsFillGeoJson] = useState<GeoJsonFeatureCollection | null>(null);
+  const [rrfsError, setRrfsError] = useState<string | null>(null);
+  const [rrfsCursorValue, setRrfsCursorValue] = useState<RrfsChartValueResponse | null>(null);
   const [obsLoadState, setObsLoadState] = useState<LoadStageState>("loading");
   const [analysisLoadState, setAnalysisLoadState] = useState<LoadStageState>("idle");
   const [mrmsLoadState, setMrmsLoadState] = useState<LoadStageState>("idle");
   const [goesLoadState, setGoesLoadState] = useState<LoadStageState>("idle");
   const [glmLoadState, setGlmLoadState] = useState<LoadStageState>("idle");
+  const [rrfsLoadState, setRrfsLoadState] = useState<LoadStageState>("idle");
   const [hazardLoadState, setHazardLoadState] = useState<LoadStageState>("loading");
   const [wpcLoadState, setWpcLoadState] = useState<LoadStageState>("idle");
   const [nwsOverlays, setNwsOverlays] = useState<NwsOverlayState>(() => {
@@ -2167,6 +2365,7 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("frontRenderStyle");
     return saved === "simple" || saved === "classic" ? saved : "classic";
   });
+  const [openHeaderMenu, setOpenHeaderMenu] = useState<string | null>(null);
 
   const applyPresetView = useCallback((view: PresetView) => {
     setSelectedViewId(view.id);
@@ -2813,6 +3012,40 @@ const densityPx = useMemo(() => {
     });
   }, [windUnit]);
 
+  const rrfs850WindFillLegend = useMemo(
+    () => RRFS_850_WIND_FILL_COLORS.map((color, idx) => {
+      const start = RRFS_850_WIND_FILL_BINS_KT[idx];
+      const end = RRFS_850_WIND_FILL_BINS_KT[idx + 1];
+      return {
+        color,
+        label: !Number.isFinite(end) ? `${start}+ kt` : `${start}-${end} kt`,
+      };
+    }),
+    []
+  );
+  const rrfs300WindFillLegend = useMemo(
+    () => RRFS_300_WIND_FILL_COLORS.map((color, idx) => {
+      const start = RRFS_300_WIND_FILL_BINS_KT[idx];
+      const end = RRFS_300_WIND_FILL_BINS_KT[idx + 1];
+      return {
+        color,
+        label: !Number.isFinite(end) ? `${start}+ kt` : `${start}-${end} kt`,
+      };
+    }),
+    []
+  );
+  const rrfs700RhFillLegend = useMemo(
+    () => RRFS_700_RH_FILL_COLORS.map((color, idx) => {
+      const start = RRFS_700_RH_FILL_BINS_PCT[idx];
+      const end = RRFS_700_RH_FILL_BINS_PCT[idx + 1];
+      return {
+        color,
+        label: !Number.isFinite(end) ? `${start}+%` : `${start}-${end}%`,
+      };
+    }),
+    []
+  );
+
   const ceilingFillLegend = useMemo(
     () => CEILING_FILL_COLORS.map((color, idx) => {
       const start = CEILING_LEVELS_HUNDREDS_FT[idx];
@@ -2983,6 +3216,14 @@ const densityPx = useMemo(() => {
       gradientCss: GOES_IR_GRADIENT,
     };
   }, [goesProduct, goesRenderStyle]);
+  const rrfsGradientLegend = useMemo(() => {
+    if (rrfsChart !== "500mb") return null;
+    return {
+      title: "RRFS 500 mb Absolute Vorticity (x10^-5 s^-1)",
+      labels: ["45", "35", "25", "15", "5"],
+      gradientCss: RRFS_500_VORT_GRADIENT,
+    };
+  }, [rrfsChart]);
   const activeFillLegendCards = useMemo<LegendCard[]>(() => {
     const cards: LegendCard[] = [];
     if (analysisFill === "windSpeed") {
@@ -3030,6 +3271,24 @@ const densityPx = useMemo(() => {
         items: GLM_LEGEND_ITEMS,
       });
     }
+    if (rrfsChart === "850mb") {
+      cards.push({
+        title: "RRFS 850 mb Wind Speed (kt)",
+        items: rrfs850WindFillLegend,
+      });
+    }
+    if (rrfsChart === "300mb") {
+      cards.push({
+        title: "RRFS 300 mb Wind Speed (kt)",
+        items: rrfs300WindFillLegend,
+      });
+    }
+    if (rrfsChart === "700mb") {
+      cards.push({
+        title: "RRFS 700 mb Relative Humidity (%)",
+        items: rrfs700RhFillLegend,
+      });
+    }
     return cards;
   }, [
     analysisFill,
@@ -3041,6 +3300,10 @@ const densityPx = useMemo(() => {
     mrmsField,
     glmProduct,
     nwsOverlays.wpcSurface,
+    rrfsChart,
+    rrfs850WindFillLegend,
+    rrfs300WindFillLegend,
+    rrfs700RhFillLegend,
   ]);
 
   type ContourLegendItem = {
@@ -3080,6 +3343,48 @@ const densityPx = useMemo(() => {
         width: 2.6,
       });
     }
+    if (rrfsChart !== "none") {
+      const levelLabel = getRrfsLevelLabel(rrfsChart);
+      const heightInterval = getRrfsHeightInterval(rrfsChart);
+      items.push({
+        key: `rrfs-${rrfsChart}-height`,
+        label: `RRFS ${levelLabel} mb Height (${heightInterval} m)`,
+        color: "#111827",
+        width: 2.2,
+      });
+      if (rrfsChart !== "300mb") {
+        items.push({
+          key: `rrfs-${rrfsChart}-temp`,
+          label: `RRFS ${levelLabel} mb Temperature (2 C)`,
+          color: "#dc2626",
+          width: 2,
+          dash: [6, 5],
+        });
+      }
+      if (rrfsChart !== "700mb" && rrfsChart !== "500mb" && rrfsChart !== "300mb") {
+        items.push({
+          key: `rrfs-${rrfsChart}-dewpoint`,
+          label: `RRFS ${levelLabel} mb Dewpoint (2 C, >=10 C)`,
+          color: "#166534",
+          width: 2,
+          dash: [5, 6],
+        });
+      }
+      if (rrfsChart === "300mb") {
+        items.push({
+          key: "rrfs-300mb-divergence",
+          label: "RRFS 300 mb Divergence (x10^-5 s^-1)",
+          color: "#1d4ed8",
+          width: 2.2,
+        });
+      }
+      items.push({
+        key: `rrfs-${rrfsChart}-wind`,
+        label: `RRFS ${levelLabel} mb Wind Barbs`,
+        color: "#111827",
+        width: 2,
+      });
+    }
     const seenHazards = new Set<string>();
     for (const feature of hazardSummary?.matched?.features ?? []) {
       const kind = String(feature?.properties?.kind ?? "");
@@ -3101,9 +3406,9 @@ const densityPx = useMemo(() => {
     derivedOverlays.mixingRatio,
     derivedOverlays.thetaE,
     derivedOverlays.moistureConvergence,
+    rrfsChart,
     hazardSummary,
     nwsOverlays,
-    tempUnit,
   ]);
 
   const diagnosticsRows = useMemo(() => {
@@ -3206,6 +3511,59 @@ const densityPx = useMemo(() => {
         value: formatGlmCursorValue(glmCursorValue),
       });
     }
+    if (rrfsChart !== "none") {
+      const levelLabel = getRrfsLevelLabel(rrfsChart);
+      rows.push({
+        label: `RRFS ${levelLabel} mb Height (m)`,
+        value: rrfsCursorValue?.height_m == null ? "—" : rrfsCursorValue.height_m.toFixed(0),
+      });
+      if (rrfsChart !== "300mb") {
+        rows.push({
+          label: `RRFS ${levelLabel} mb Temperature (°C)`,
+          value: rrfsCursorValue?.temperature_c == null ? "—" : rrfsCursorValue.temperature_c.toFixed(1),
+        });
+      }
+      if (rrfsChart !== "700mb" && rrfsChart !== "500mb" && rrfsChart !== "300mb") {
+        rows.push({
+          label: `RRFS ${levelLabel} mb Dewpoint (°C)`,
+          value: rrfsCursorValue?.dewpoint_c == null ? "—" : rrfsCursorValue.dewpoint_c.toFixed(1),
+        });
+      }
+      rows.push({
+        label: `RRFS ${levelLabel} mb Wind (kt)`,
+        value: rrfsCursorValue?.wind_speed_kt == null
+          ? "—"
+          : `${rrfsCursorValue.wind_speed_kt.toFixed(0)} kt @ ${rrfsCursorValue.wind_dir_deg == null ? "—" : `${Math.round(rrfsCursorValue.wind_dir_deg)}°`}`,
+      });
+      if (rrfsChart === "300mb") {
+        rows.push({
+          label: "RRFS 300 mb Wind Speed (kt)",
+          value: rrfsCursorValue?.wind_speed_kt == null ? "—" : rrfsCursorValue.wind_speed_kt.toFixed(1),
+        });
+        rows.push({
+          label: "RRFS 300 mb Divergence (x10^-5 s^-1)",
+          value: rrfsCursorValue?.divergence_s1 == null ? "—" : (rrfsCursorValue.divergence_s1 * 1e5).toFixed(1),
+        });
+      }
+      if (rrfsChart === "850mb") {
+        rows.push({
+          label: "RRFS 850 mb Wind Speed (kt)",
+          value: rrfsCursorValue?.wind_speed_kt == null ? "—" : rrfsCursorValue.wind_speed_kt.toFixed(1),
+        });
+      }
+      if (rrfsChart === "700mb") {
+        rows.push({
+          label: "RRFS 700 mb Relative Humidity (%)",
+          value: rrfsCursorValue?.relative_humidity_pct == null ? "—" : rrfsCursorValue.relative_humidity_pct.toFixed(1),
+        });
+      }
+      if (rrfsChart === "500mb") {
+        rows.push({
+          label: "RRFS 500 mb Absolute Vorticity (x10^-5 s^-1)",
+          value: rrfsCursorValue?.absolute_vorticity_s1 == null ? "—" : (rrfsCursorValue.absolute_vorticity_s1 * 1e5).toFixed(1),
+        });
+      }
+    }
 
     return rows;
   }, [
@@ -3222,12 +3580,19 @@ const densityPx = useMemo(() => {
     goesCursorValue,
     glmProduct,
     glmCursorValue,
+    rrfsChart,
+    rrfsCursorValue,
   ]);
 
   const selectedTimeDisplayIso = useMemo(
     () => requestedTimeIso ?? obsMatchMeta?.matched_time ?? lastUpdate,
     [requestedTimeIso, obsMatchMeta, lastUpdate]
   );
+  const rrfsRequestedTimeIso = useMemo(
+    () => obsMatchMeta?.matched_time ?? lastUpdate,
+    [obsMatchMeta, lastUpdate]
+  );
+  const anyRrfsContourOn = rrfsChart !== "none";
 
   const validTimeLabel = useMemo(
     () => formatValidTimeLabel(selectedTimeDisplayIso, displayTimeZone),
@@ -3448,6 +3813,96 @@ const densityPx = useMemo(() => {
     cursorProbe?.lng,
   ]);
 
+  const refreshRrfsContours = useCallback(async () => {
+    if (rrfsChart === "none") {
+      setRrfsMeta(null);
+      setRrfsContoursGeoJson(null);
+      setRrfsWindsGeoJson(null);
+      setRrfsFillGeoJson(null);
+      setRrfsError(null);
+      setRrfsLoadState("idle");
+      return;
+    }
+    if (!rrfsRequestedTimeIso) {
+      setRrfsMeta(null);
+      setRrfsContoursGeoJson(null);
+      setRrfsWindsGeoJson(null);
+      setRrfsFillGeoJson(null);
+      setRrfsError(null);
+      setRrfsLoadState("loading");
+      return;
+    }
+    setRrfsLoadState("loading");
+    try {
+      const params = new URLSearchParams({
+        chart: rrfsChart,
+        time: rrfsRequestedTimeIso,
+      });
+      const res = await fetch(`/api/rrfs/chart?${params.toString()}`);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as RrfsChartResponse;
+      setRrfsMeta(data);
+      setRrfsContoursGeoJson(data.contours ?? { type: "FeatureCollection", features: [] });
+      setRrfsWindsGeoJson(data.winds ?? { type: "FeatureCollection", features: [] });
+      setRrfsFillGeoJson(data.wind_fill ?? data.rh_fill ?? data.vort_fill ?? null);
+      setRrfsError(null);
+      setRrfsLoadState("ready");
+    } catch (e: any) {
+      setRrfsMeta(null);
+      setRrfsContoursGeoJson(null);
+      setRrfsWindsGeoJson(null);
+      setRrfsFillGeoJson(null);
+      setRrfsError(e?.message ?? "Failed to load RRFS contours");
+      setRrfsLoadState("error");
+    }
+  }, [rrfsChart, rrfsRequestedTimeIso]);
+
+  useEffect(() => {
+    refreshRrfsContours();
+  }, [refreshRrfsContours]);
+
+  useEffect(() => {
+    if (!showCursorDiagnostics || rrfsChart === "none" || !rrfsRequestedTimeIso || !cursorProbe) {
+      setRrfsCursorValue(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          chart: rrfsChart,
+          time: rrfsRequestedTimeIso,
+          lat: cursorProbe.lat.toFixed(5),
+          lon: cursorProbe.lng.toFixed(5),
+        });
+        const res = await fetch(`/api/rrfs/chart_value?${params.toString()}`, { signal: controller.signal });
+        if (!res.ok) {
+          setRrfsCursorValue(null);
+          return;
+        }
+        const data = (await res.json()) as RrfsChartValueResponse;
+        setRrfsCursorValue(data);
+      } catch (e: any) {
+        if (e?.name !== "AbortError") setRrfsCursorValue(null);
+      }
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    showCursorDiagnostics,
+    rrfsChart,
+    rrfsRequestedTimeIso,
+    cursorProbe?.lat,
+    cursorProbe?.lng,
+  ]);
+
   const refreshWpcSurface = useCallback(async () => {
     if (!nwsOverlays.wpcSurface) {
       setWpcSurface(null);
@@ -3590,6 +4045,27 @@ const densityPx = useMemo(() => {
       }
     }
 
+    if (rrfsChart !== "none") {
+      const label = getRrfsChartLabel(rrfsChart);
+      if (rrfsMeta) {
+        const initLabel = rrfsMeta.init_time ? formatTimestampWithSeconds(rrfsMeta.init_time, displayTimeZone) : "—";
+        const detail = `${describeMatchDetail(rrfsMeta, displayTimeZone)} Run ${initLabel} F${String(rrfsMeta.forecast_hour).padStart(2, "0")}.`;
+        statuses.push({
+          key: `rrfs-${rrfsChart}`,
+          label,
+          state: "matched",
+          detail,
+        });
+      } else if (rrfsError) {
+        statuses.push({
+          key: `rrfs-${rrfsChart}`,
+          label,
+          state: "dropped",
+          detail: rrfsError,
+        });
+      }
+    }
+
     if (nwsOverlays.wpcSurface) {
       if (wpcSurface?.matched_time) {
         statuses.push({
@@ -3627,7 +4103,7 @@ const densityPx = useMemo(() => {
     }
 
     return statuses;
-  }, [displayTimeZone, glmError, glmMeta, glmProduct, goesError, goesMeta, goesProduct, hazardError, lastUpdate, mrmsError, mrmsField, mrmsMeta, nwsOverlays.wpcSurface, obsMatchMeta, wpcError, wpcSurface]);
+  }, [displayTimeZone, glmError, glmMeta, glmProduct, goesError, goesMeta, goesProduct, hazardError, lastUpdate, mrmsError, mrmsField, mrmsMeta, nwsOverlays.wpcSurface, obsMatchMeta, rrfsChart, rrfsError, rrfsMeta, wpcError, wpcSurface]);
 
   const loadingStages = useMemo(() => {
     const stages: Array<{ key: string; label: string; state: LoadStageState }> = [
@@ -3647,11 +4123,14 @@ const densityPx = useMemo(() => {
     if (glmProduct !== "none") {
       stages.push({ key: "glm", label: getGlmProductLabel(glmProduct), state: glmLoadState });
     }
+    if (anyRrfsContourOn) {
+      stages.push({ key: "rrfs", label: "RRFS", state: rrfsLoadState });
+    }
     if (nwsOverlays.wpcSurface) {
       stages.push({ key: "wpc", label: "WPC Surface", state: wpcLoadState });
     }
     return stages;
-  }, [obsLoadState, hazardLoadState, mapLoaded, anyAnalysisLikeOverlayOn, analysisLoadState, mrmsField, mrmsLoadState, goesProduct, goesLoadState, glmProduct, glmLoadState, nwsOverlays.wpcSurface, wpcLoadState]);
+  }, [obsLoadState, hazardLoadState, mapLoaded, anyAnalysisLikeOverlayOn, analysisLoadState, mrmsField, mrmsLoadState, goesProduct, goesLoadState, glmProduct, glmLoadState, anyRrfsContourOn, rrfsLoadState, nwsOverlays.wpcSurface, wpcLoadState]);
 
   const loadingProgress = useMemo(() => {
     const total = loadingStages.length;
@@ -4176,8 +4655,24 @@ function strokeIsotherms(
   ctx: CanvasRenderingContext2D,
   segments: Pt[][],
   level: number,
-  freezingLevel: number
+  freezingLevel: number,
+  forceAllRed = false
 ) {
+  if (forceAllRed) {
+    ctx.save();
+    ctx.strokeStyle = "#dc2626";
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([6, 5]);
+    for (const seg of segments) {
+      ctx.beginPath();
+      ctx.moveTo(seg[0].x, seg[0].y);
+      for (let k = 1; k < seg.length; k++) ctx.lineTo(seg[k].x, seg[k].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
   const belowFreezing = level < freezingLevel;
   const isFreezing = Math.abs(level - freezingLevel) < 1e-6;
 
@@ -4309,16 +4804,105 @@ function strokeMoistureConvergenceContours(
   ctx.restore();
 }
 
-type LabelMode = "temp" | "dewpoint" | "slp" | "mixingRatio" | "thetaE";
+function strokeDivergenceContours(
+  ctx: CanvasRenderingContext2D,
+  segments: Pt[][]
+) {
+  ctx.save();
+  ctx.strokeStyle = "#1d4ed8";
+  ctx.lineWidth = 2.2;
+  ctx.setLineDash([]);
+
+  for (const seg of segments) {
+    if (!seg || seg.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].x, seg[i].y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+type LabelMode = "temp" | "dewpoint" | "slp" | "mixingRatio" | "thetaE" | "divergence";
+
+function pointsClose(a: Pt, b: Pt, tol = 2.5): boolean {
+  return Math.abs(a.x - b.x) <= tol && Math.abs(a.y - b.y) <= tol;
+}
+
+function stitchProjectedContourSegments(segments: Pt[][], tol = 2.5): Pt[][] {
+  if (segments.length <= 1) return segments.filter((seg) => seg.length >= 2);
+
+  const used = new Array(segments.length).fill(false);
+  const stitched: Pt[][] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const seed = segments[i];
+    if (used[i] || seed.length < 2) continue;
+    used[i] = true;
+    const line = seed.slice();
+
+    let extended = true;
+    while (extended) {
+      extended = false;
+      for (let j = 0; j < segments.length; j++) {
+        const cand = segments[j];
+        if (used[j] || cand.length < 2) continue;
+
+        const lineStart = line[0];
+        const lineEnd = line[line.length - 1];
+        const candStart = cand[0];
+        const candEnd = cand[cand.length - 1];
+
+        if (pointsClose(lineEnd, candStart, tol)) {
+          line.push(...cand.slice(1));
+        } else if (pointsClose(lineEnd, candEnd, tol)) {
+          line.push(...cand.slice(0, -1).reverse());
+        } else if (pointsClose(lineStart, candEnd, tol)) {
+          line.unshift(...cand.slice(0, -1));
+        } else if (pointsClose(lineStart, candStart, tol)) {
+          line.unshift(...cand.slice(1).reverse());
+        } else {
+          continue;
+        }
+
+        used[j] = true;
+        extended = true;
+      }
+    }
+
+    stitched.push(line);
+  }
+
+  return stitched;
+}
+
 function labelContours(
   ctx: CanvasRenderingContext2D,
   segments: Pt[][],
   level: number,
   mode: LabelMode,
-  opts: { tempUnit: "F" | "C"; freezingLevel?: number }
+  opts: {
+    tempUnit: "F" | "C";
+    freezingLevel?: number;
+    labelColorOverride?: string;
+    labelText?: string;
+    fontPx?: number;
+    maxLabels?: number;
+    minLen?: number;
+    repeatLongSegments?: boolean;
+    labelSpacingPx?: number;
+  }
 ) {
   const tempUnit = opts.tempUnit;
   const freezingLevel = opts.freezingLevel ?? (tempUnit === "F" ? 32 : 0);
+  const labelColorOverride = opts.labelColorOverride;
+  const labelText = opts.labelText;
+  const fontPx = opts.fontPx ?? 14;
+  const maxLabels = opts.maxLabels ?? 5;
+  const minLen = opts.minLen ?? 30;
+  const repeatLongSegments = opts.repeatLongSegments ?? false;
+  const labelSpacingPx = opts.labelSpacingPx ?? Math.max(minLen * 1.35, 120);
 
   // Color/text by mode
   let labelColor = "#111827";
@@ -4328,51 +4912,115 @@ function labelContours(
     const belowFreezing = level < freezingLevel;
     const isFreezing = Math.abs(level - freezingLevel) < 1e-6;
     labelColor = isFreezing ? "#111827" : belowFreezing ? "#2563eb" : "#dc2626";
-    text = `${Math.round(level)}°${tempUnit}`;
+    text = labelText ?? `${Math.round(level)}°${tempUnit}`;
   } else if (mode === "dewpoint") {
     labelColor = "#14532d";
-    text = `${Math.round(level)}°${tempUnit}`;
+    text = labelText ?? `${Math.round(level)}°${tempUnit}`;
   } else if (mode === "mixingRatio") {
     labelColor = "#14532d";
-    text = `${Math.round(level)} g/kg`;
+    text = labelText ?? `${Math.round(level)} g/kg`;
   } else if (mode === "thetaE") {
     labelColor = "#15803d";
-    text = `${Math.round(level)}K`;
+    text = labelText ?? `${Math.round(level)}K`;
+  } else if (mode === "divergence") {
+    labelColor = "#1d4ed8";
+    text = labelText ?? `${Math.round(level * 1e5)}`;
   } else {
     // slp
     labelColor = "#111827";
-    text = `${Math.round(level)}`; // mb
+    text = labelText ?? `${Math.round(level)}`; // mb
   }
+
+  if (labelColorOverride) labelColor = labelColorOverride;
 
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
   ctx.setLineDash([]);
-  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.font = `bold ${fontPx}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  const canvasW = ctx.canvas.width / (window.devicePixelRatio || 1);
+  const canvasH = ctx.canvas.height / (window.devicePixelRatio || 1);
+  const viewportMargin = 24;
 
-  const maxLabels = 5;
-  const minLen = 30;
+  function pointAlongPolyline(seg: Pt[], targetDist: number): Pt {
+    let walked = 0;
+    for (let i = 1; i < seg.length; i++) {
+      const a = seg[i - 1];
+      const b = seg[i];
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+      if (walked + segLen >= targetDist && segLen > 0) {
+        const t = (targetDist - walked) / segLen;
+        return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      }
+      walked += segLen;
+    }
+    return seg[seg.length - 1];
+  }
 
-  // Build candidates from segment endpoints
+  function angleAtDistance(seg: Pt[], targetDist: number): number {
+    let walked = 0;
+    for (let i = 1; i < seg.length; i++) {
+      const a = seg[i - 1];
+      const b = seg[i];
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+      if (walked + segLen >= targetDist && segLen > 0) {
+        return Math.atan2(b.y - a.y, b.x - a.x);
+      }
+      walked += segLen;
+    }
+    const a = seg[Math.max(0, seg.length - 2)];
+    const b = seg[seg.length - 1];
+    return Math.atan2(b.y - a.y, b.x - a.x);
+  }
+
+  // Build candidates from contour geometry
   const candidates: Array<{ a: Pt; b: Pt; len: number }> = [];
   for (const seg of segments) {
     if (!seg || seg.length < 2) continue;
-    const a = seg[0];
-    const b = seg[seg.length - 1];
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    if (len >= minLen) candidates.push({ a, b, len });
+    let len = 0;
+    for (let i = 1; i < seg.length; i++) len += Math.hypot(seg[i].x - seg[i - 1].x, seg[i].y - seg[i - 1].y);
+    if (len < minLen) continue;
+
+    if (!repeatLongSegments) {
+      const a = seg[0];
+      const b = seg[seg.length - 1];
+      candidates.push({ a, b, len });
+      continue;
+    }
+
+    const count = Math.max(1, Math.min(6, Math.floor(len / labelSpacingPx)));
+    for (let idx = 0; idx < count; idx++) {
+      const frac = (idx + 1) / (count + 1);
+      const dist = len * frac;
+      const center = pointAlongPolyline(seg, dist);
+      const ang = angleAtDistance(seg, dist);
+      const half = Math.min(24, Math.max(10, len / 12));
+      const dx = Math.cos(ang) * half;
+      const dy = Math.sin(ang) * half;
+      candidates.push({
+        a: { x: center.x - dx, y: center.y - dy },
+        b: { x: center.x + dx, y: center.y + dy },
+        len,
+      });
+    }
   }
-  if (candidates.length === 0) {
+  const visibleCandidates = candidates.filter(({ a, b }) => {
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    return mx >= -viewportMargin && mx <= canvasW + viewportMargin && my >= -viewportMargin && my <= canvasH + viewportMargin;
+  });
+
+  if (visibleCandidates.length === 0) {
     ctx.restore();
     return;
   }
 
-  candidates.sort((a, b) => b.len - a.len);
+  visibleCandidates.sort((a, b) => b.len - a.len);
 
-  for (let i = 0; i < candidates.length && i < maxLabels; i++) {
-    const { a, b } = candidates[i];
+  for (let i = 0; i < visibleCandidates.length && i < maxLabels; i++) {
+    const { a, b } = visibleCandidates[i];
 
     const dx = b.x - a.x;
     const dy = b.y - a.y;
@@ -5174,6 +5822,310 @@ const drawAnalysisOverlay = useCallback(() => {
     return true;
   }, [analysisOverlays, analysisFill, derivedOverlays, declutteredObs, tempUnit, anyAnalysisLikeOverlayOn, windRenderMode, windUnit]);
 
+const drawRrfsFillOverlay = useCallback(() => {
+  const canvas = rrfsFillCanvasRef.current;
+  const mapObj = mapRef.current?.getMap();
+  if (!canvas || !mapObj) return false;
+
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  const dpr = window.devicePixelRatio || 1;
+  if (width < 2 || height < 2) return false;
+
+  canvas.width = Math.max(1, Math.round(width * dpr));
+  canvas.height = Math.max(1, Math.round(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  const ctx0 = canvas.getContext("2d");
+  if (!ctx0) return false;
+  const ctx = ctx0;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if ((rrfsChart !== "850mb" && rrfsChart !== "700mb" && rrfsChart !== "500mb" && rrfsChart !== "300mb") || !rrfsFillGeoJson?.features?.length) return true;
+
+  let maxI = -1;
+  let maxJ = -1;
+  const nodes = new Map<string, { x: number; y: number; val: number }>();
+  for (const feature of rrfsFillGeoJson.features) {
+    const coords = feature?.geometry?.coordinates;
+    const props = feature?.properties ?? {};
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    const gridI = Number(props.grid_i);
+    const gridJ = Number(props.grid_j);
+      const value =
+      rrfsChart === "850mb" || rrfsChart === "300mb"
+        ? Number(props.wind_speed_kt)
+        : rrfsChart === "700mb"
+          ? Number(props.relative_humidity_pct)
+          : Number(props.absolute_vorticity_s1);
+    if (!Number.isFinite(value) || !Number.isFinite(gridI) || !Number.isFinite(gridJ)) continue;
+    const p = mapObj.project([Number(coords[0]), Number(coords[1])]);
+    const i = Math.round(gridI);
+    const j = Math.round(gridJ);
+    if (i < 0 || j < 0) continue;
+    maxI = Math.max(maxI, i);
+    maxJ = Math.max(maxJ, j);
+    nodes.set(`${i}:${j}`, { x: p.x, y: p.y, val: value });
+  }
+  if (nodes.size < 4 || maxI < 1 || maxJ < 1) return true;
+
+  ctx.save();
+  ctx.globalAlpha = 0.4;
+  for (let j = 0; j < maxJ; j++) {
+    for (let i = 0; i < maxI; i++) {
+      const p00 = nodes.get(`${i}:${j}`);
+      const p10 = nodes.get(`${i + 1}:${j}`);
+      const p11 = nodes.get(`${i + 1}:${j + 1}`);
+      const p01 = nodes.get(`${i}:${j + 1}`);
+      if (!p00 || !p10 || !p11 || !p01) continue;
+
+      const meanValue = (p00.val + p10.val + p11.val + p01.val) / 4;
+      const color =
+        rrfsChart === "850mb"
+          ? rrfs850WindFillColor(meanValue)
+          : rrfsChart === "300mb"
+            ? rrfs300WindFillColor(meanValue)
+          : rrfsChart === "700mb"
+            ? rrfs700RhFillColor(meanValue)
+            : rrfs500VortFillColor(meanValue);
+      if (!color) continue;
+
+      const minX = Math.min(p00.x, p10.x, p11.x, p01.x);
+      const maxX = Math.max(p00.x, p10.x, p11.x, p01.x);
+      const minY = Math.min(p00.y, p10.y, p11.y, p01.y);
+      const maxY = Math.max(p00.y, p10.y, p11.y, p01.y);
+      if (maxX < -40 || minX > width + 40 || maxY < -40 || minY > height + 40) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(p00.x, p00.y);
+      ctx.lineTo(p10.x, p10.y);
+      ctx.lineTo(p11.x, p11.y);
+      ctx.lineTo(p01.x, p01.y);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+  return true;
+}, [rrfsChart, rrfsFillGeoJson]);
+
+const drawRrfsWindOverlay = useCallback(() => {
+  const canvas = rrfsWindCanvasRef.current;
+  const mapObj = mapRef.current?.getMap();
+  if (!canvas || !mapObj) return false;
+
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  const dpr = window.devicePixelRatio || 1;
+  if (width < 2 || height < 2) return false;
+
+  canvas.width = Math.max(1, Math.round(width * dpr));
+  canvas.height = Math.max(1, Math.round(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  const ctx0 = canvas.getContext("2d");
+  if (!ctx0) return false;
+  const ctx = ctx0;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (rrfsChart === "none" || !rrfsWindsGeoJson?.features?.length) return true;
+
+  const zoom = mapObj.getZoom();
+  const stride = zoom < 4.5 ? 6 : zoom < 6 ? 4 : zoom < 7.5 ? 3 : zoom < 9 ? 2 : 1;
+  ctx.save();
+  ctx.globalAlpha = 0.92;
+  ctx.strokeStyle = "#111827";
+  ctx.fillStyle = "#111827";
+  ctx.lineWidth = 1.3;
+
+  for (const feature of rrfsWindsGeoJson.features) {
+    const coords = feature?.geometry?.coordinates;
+    const props = feature?.properties ?? {};
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    const gridI = Number(props.grid_i);
+    const gridJ = Number(props.grid_j);
+    if (Number.isFinite(gridI) && Number.isFinite(gridJ) && ((gridI % stride !== 0) || (gridJ % stride !== 0))) continue;
+    const dir = Number(props.wind_dir_deg);
+    const spd = Number(props.wind_speed_kt);
+    if (!Number.isFinite(dir) || !Number.isFinite(spd) || spd < 2) continue;
+    const p = mapObj.project([Number(coords[0]), Number(coords[1])]);
+    if (p.x < -24 || p.x > width + 24 || p.y < -24 || p.y > height + 24) continue;
+    drawWindBarb(ctx, p.x, p.y, 0, dir, spd);
+  }
+
+  ctx.restore();
+  return true;
+}, [rrfsChart, rrfsWindsGeoJson]);
+
+const drawRrfsContourOverlay = useCallback(() => {
+  const canvas = rrfsContourCanvasRef.current;
+  const mapObj = mapRef.current?.getMap();
+  if (!canvas || !mapObj) return false;
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  if (width < 2 || height < 2) return false;
+
+  canvas.width = Math.max(1, Math.round(width * dpr));
+  canvas.height = Math.max(1, Math.round(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  const ctx0 = canvas.getContext("2d");
+  if (!ctx0) return false;
+  const ctx = ctx0;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (rrfsChart === "none" || !rrfsContoursGeoJson?.features?.length) return true;
+
+  const grouped = new Map<string, { member: string; level: number; segments: Pt[][] }>();
+  for (const feature of rrfsContoursGeoJson.features) {
+    if (feature?.geometry?.type !== "LineString") continue;
+    const props = feature?.properties ?? {};
+    if (props.role !== "line") continue;
+    const member = String(props.member ?? "");
+    const level = Number(props.level);
+    const coords = feature?.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2 || !Number.isFinite(level) || !member) continue;
+
+    const seg: Pt[] = [];
+    for (const pair of coords) {
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      const lon = Number(pair[0]);
+      const lat = Number(pair[1]);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+      const p = mapObj.project([lon, lat]);
+      seg.push({ x: p.x, y: p.y });
+    }
+    if (seg.length < 2) continue;
+
+    const key = `${member}:${level}`;
+    const entry = grouped.get(key) ?? { member, level, segments: [] };
+    entry.segments.push(seg);
+    grouped.set(key, entry);
+  }
+
+  ctx.save();
+  ctx.globalAlpha = 0.92;
+  for (const entry of grouped.values()) {
+    if (entry.member === "height") {
+      strokeIsobars(ctx, stitchProjectedContourSegments(entry.segments), entry.level);
+    } else if (entry.member === "temperature") {
+      strokeIsotherms(ctx, entry.segments, entry.level, 0, rrfsChart === "500mb");
+    } else if (entry.member === "dewpoint") {
+      strokeIsodrosotherms(ctx, entry.segments, entry.level);
+    } else if (entry.member === "divergence") {
+      strokeDivergenceContours(ctx, entry.segments);
+    }
+  }
+  ctx.restore();
+  return true;
+}, [rrfsChart, rrfsContoursGeoJson]);
+
+const drawRrfsLabelOverlay = useCallback(() => {
+  const canvas = analysisLabelCanvasRef.current;
+  const mapObj = mapRef.current?.getMap();
+  if (!canvas || !mapObj) return false;
+  const zoom = typeof viewState.zoom === "number" ? viewState.zoom : mapObj.getZoom();
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  if (width < 2 || height < 2) return false;
+
+  canvas.width = Math.max(1, Math.round(width * dpr));
+  canvas.height = Math.max(1, Math.round(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  const ctx0 = canvas.getContext("2d");
+  if (!ctx0) return false;
+  const ctx = ctx0;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (rrfsChart === "none" || !rrfsContoursGeoJson?.features?.length) return true;
+
+  const grouped = new Map<string, { member: string; level: number; segments: Pt[][] }>();
+  for (const feature of rrfsContoursGeoJson.features) {
+    if (feature?.geometry?.type !== "LineString") continue;
+    const props = feature?.properties ?? {};
+    if (props.role !== "line") continue;
+    const member = String(props.member ?? "");
+    const level = Number(props.level);
+    const coords = feature?.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2 || !Number.isFinite(level) || !member) continue;
+
+    const seg: Pt[] = [];
+    for (const pair of coords) {
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      const lon = Number(pair[0]);
+      const lat = Number(pair[1]);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+      const p = mapObj.project([lon, lat]);
+      seg.push({ x: p.x, y: p.y });
+    }
+    if (seg.length < 2) continue;
+
+    const key = `${member}:${level}`;
+    const entry = grouped.get(key) ?? { member, level, segments: [] };
+    entry.segments.push(seg);
+    grouped.set(key, entry);
+  }
+
+  const rrfsLabelOptions =
+    zoom < 5
+      ? { fontPx: 13, maxLabels: 4, minLen: 95, repeatLongSegments: true, labelSpacingPx: 260 }
+      : zoom < 6
+        ? { fontPx: 14, maxLabels: 7, minLen: 65, repeatLongSegments: true, labelSpacingPx: 190 }
+        : zoom < 7
+          ? { fontPx: 15, maxLabels: 11, minLen: 42, repeatLongSegments: true, labelSpacingPx: 135 }
+          : { fontPx: 16, maxLabels: 16, minLen: 24, repeatLongSegments: true, labelSpacingPx: 90 };
+
+  for (const entry of grouped.values()) {
+    if (entry.member === "height") {
+      labelContours(ctx, stitchProjectedContourSegments(entry.segments), entry.level, "slp", {
+        tempUnit: "C",
+        labelText: `${Math.round(entry.level)}`,
+        ...rrfsLabelOptions,
+      });
+    } else if (entry.member === "temperature") {
+      labelContours(ctx, entry.segments, entry.level, "temp", {
+        tempUnit: "C",
+        freezingLevel: 0,
+        labelColorOverride: rrfsChart === "500mb" ? "#dc2626" : undefined,
+        labelText: `${Math.round(entry.level)}`,
+        ...rrfsLabelOptions,
+      });
+    } else if (entry.member === "dewpoint") {
+      labelContours(ctx, entry.segments, entry.level, "dewpoint", {
+        tempUnit: "C",
+        labelText: `${Math.round(entry.level)}`,
+        ...rrfsLabelOptions,
+      });
+    } else if (entry.member === "divergence") {
+      labelContours(ctx, entry.segments, entry.level, "divergence", {
+        tempUnit: "C",
+        labelText: `${Math.round(entry.level * 1e5)}`,
+        ...rrfsLabelOptions,
+      });
+    }
+  }
+
+  return true;
+}, [rrfsChart, rrfsContoursGeoJson, viewState.zoom]);
+
 function windToUV(dirDeg: number, spdKt: number) {
   // METAR direction is "from" direction.
   const rad = (dirDeg * Math.PI) / 180;
@@ -5204,8 +6156,11 @@ const exportPng = useCallback(() => {
     overlayCanvases.push(wpcFrontCanvasRef.current);
   }
   if (analysisCanvasRef.current) overlayCanvases.push(analysisCanvasRef.current);
+  if (rrfsFillCanvasRef.current) overlayCanvases.push(rrfsFillCanvasRef.current);
+  if (rrfsContourCanvasRef.current) overlayCanvases.push(rrfsContourCanvasRef.current);
   if (showStations && displayMode === "plots" && canvasRef.current) overlayCanvases.push(canvasRef.current);
   if (analysisLabelCanvasRef.current) overlayCanvases.push(analysisLabelCanvasRef.current);
+  if (rrfsWindCanvasRef.current) overlayCanvases.push(rrfsWindCanvasRef.current);
 
   const width = mapCanvas.width;   // device pixels
   const height = mapCanvas.height;
@@ -5396,6 +6351,53 @@ const exportPng = useCallback(() => {
       }
     }
 
+    if (rrfsGradientLegend) {
+      const cardWidth = 172 * scale;
+      const cardHeight = 240 * scale;
+      const x = margin;
+      const y = height - margin - cardHeight - (activeFillLegendCards.length > 0 ? ((activeFillLegendCards.length + 0.2) * rowGap) : 0);
+
+      drawRoundRect(x, y, cardWidth, cardHeight, borderRadius);
+      ctx.fillStyle = "rgba(2, 6, 23, 0.84)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+      ctx.lineWidth = 1 * scale;
+      ctx.stroke();
+
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = `700 ${titleFontSize}px sans-serif`;
+      ctx.fillText(rrfsGradientLegend.title.toUpperCase(), x + padX, y + padY + titleH - 2 * scale);
+
+      const barX = x + padX;
+      const barY = y + padY + titleH + titleGap;
+      const barW = 18 * scale;
+      const barH = cardHeight - (padY * 2 + titleH + titleGap + 8 * scale);
+      const grad = ctx.createLinearGradient(0, barY + barH, 0, barY);
+      grad.addColorStop(0.0, "#000004");
+      grad.addColorStop(0.18, "#180f3d");
+      grad.addColorStop(0.36, "#440f76");
+      grad.addColorStop(0.52, "#721f81");
+      grad.addColorStop(0.66, "#9e2f7f");
+      grad.addColorStop(0.79, "#cd4071");
+      grad.addColorStop(0.90, "#f1605d");
+      grad.addColorStop(0.96, "#fd9668");
+      grad.addColorStop(1.0, "#feca8d");
+      ctx.fillStyle = grad;
+      drawRoundRect(barX, barY, barW, barH, 3 * scale);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.stroke();
+
+      const ticks = [45, 35, 25, 15, 5];
+      ctx.font = `${fontSize}px sans-serif`;
+      ctx.fillStyle = "#e5e7eb";
+      for (const t of ticks) {
+        const p = (t - RRFS_500_VORT_MIN) / (RRFS_500_VORT_MAX - RRFS_500_VORT_MIN);
+        const yy = barY + barH - p * barH;
+        ctx.fillText(`${t}`, barX + barW + 8 * scale, yy + 3 * scale);
+      }
+    }
+
     if (contourLegendItems.length > 0) {
       ctx.font = `600 ${titleFontSize}px sans-serif`;
       let maxTextWidth = Math.ceil(ctx.measureText("Lines").width);
@@ -5450,7 +6452,7 @@ const exportPng = useCallback(() => {
   a.href = dataUrl;
   a.download = `wx-mesoanalysis_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   a.click();
-}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems, validTimeLabel, nwsOverlays.wpcSurface, frontRenderStyle, legendsCollapsed, mrmsGradientLegend]);
+}, [showStations, displayMode, includeLegendInExport, activeFillLegendCards, contourLegendItems, validTimeLabel, nwsOverlays.wpcSurface, frontRenderStyle, legendsCollapsed, mrmsGradientLegend, rrfsGradientLegend]);
 
 useEffect(() => {
   localStorage.setItem("showStations", String(showStations));
@@ -5492,6 +6494,28 @@ useEffect(() => {
     if (frame2 != null) window.cancelAnimationFrame(frame2);
   };
 }, [mapLoaded, anyAnalysisLikeOverlayOn, drawAnalysisOverlay]);
+
+useEffect(() => {
+  if (!mapLoaded || !anyRrfsContourOn) return;
+
+  let cancelled = false;
+  let frame2: number | null = null;
+  const frameId = window.requestAnimationFrame(() => {
+    frame2 = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      drawRrfsFillOverlay();
+      drawRrfsContourOverlay();
+      drawRrfsWindOverlay();
+      drawRrfsLabelOverlay();
+    });
+  });
+
+  return () => {
+    cancelled = true;
+    window.cancelAnimationFrame(frameId);
+    if (frame2 != null) window.cancelAnimationFrame(frame2);
+  };
+}, [mapLoaded, anyRrfsContourOn, drawRrfsFillOverlay, drawRrfsContourOverlay, drawRrfsWindOverlay, drawRrfsLabelOverlay]);
 
 useEffect(() => {
   if (!mapLoaded || !anyAnalysisLikeOverlayOn) return;
@@ -5561,6 +6585,76 @@ useEffect(() => {
 }, [mapLoaded, anyAnalysisLikeOverlayOn, drawAnalysisOverlay]);
 
 useEffect(() => {
+  if (!mapLoaded || !anyRrfsContourOn) return;
+
+  const map = mapRef.current?.getMap();
+  if (!map) return;
+
+  const runRedraw = () => {
+    if (rrfsAnimationFrameRef.current) {
+      cancelAnimationFrame(rrfsAnimationFrameRef.current);
+    }
+    rrfsAnimationFrameRef.current = requestAnimationFrame(() => {
+      rrfsLastDrawRef.current = performance.now();
+      drawRrfsFillOverlay();
+      drawRrfsContourOverlay();
+      drawRrfsWindOverlay();
+      drawRrfsLabelOverlay();
+    });
+  };
+
+  const scheduleThrottledRedraw = () => {
+    const now = performance.now();
+    const elapsed = now - rrfsLastDrawRef.current;
+    const throttleMs = 120;
+    if (elapsed >= throttleMs) {
+      if (rrfsThrottleTimeoutRef.current != null) {
+        window.clearTimeout(rrfsThrottleTimeoutRef.current);
+        rrfsThrottleTimeoutRef.current = null;
+      }
+      runRedraw();
+      return;
+    }
+    if (rrfsThrottleTimeoutRef.current != null) return;
+    rrfsThrottleTimeoutRef.current = window.setTimeout(() => {
+      rrfsThrottleTimeoutRef.current = null;
+      runRedraw();
+    }, throttleMs - elapsed);
+  };
+
+  const finalizeRedraw = () => {
+    if (rrfsThrottleTimeoutRef.current != null) {
+      window.clearTimeout(rrfsThrottleTimeoutRef.current);
+      rrfsThrottleTimeoutRef.current = null;
+    }
+    runRedraw();
+  };
+
+  map.on("move", scheduleThrottledRedraw);
+  map.on("zoom", scheduleThrottledRedraw);
+  map.on("moveend", finalizeRedraw);
+  map.on("zoomend", finalizeRedraw);
+  map.on("resize", finalizeRedraw);
+  finalizeRedraw();
+
+  return () => {
+    map.off("move", scheduleThrottledRedraw);
+    map.off("zoom", scheduleThrottledRedraw);
+    map.off("moveend", finalizeRedraw);
+    map.off("zoomend", finalizeRedraw);
+    map.off("resize", finalizeRedraw);
+    if (rrfsAnimationFrameRef.current) {
+      cancelAnimationFrame(rrfsAnimationFrameRef.current);
+      rrfsAnimationFrameRef.current = null;
+    }
+    if (rrfsThrottleTimeoutRef.current != null) {
+      window.clearTimeout(rrfsThrottleTimeoutRef.current);
+      rrfsThrottleTimeoutRef.current = null;
+    }
+  };
+}, [mapLoaded, anyRrfsContourOn, drawRrfsFillOverlay, drawRrfsContourOverlay, drawRrfsWindOverlay, drawRrfsLabelOverlay]);
+
+useEffect(() => {
   localStorage.setItem("analysisOverlays", JSON.stringify(analysisOverlays));
 }, [analysisOverlays]);
 
@@ -5609,6 +6703,10 @@ useEffect(() => {
 }, [glmProduct]);
 
 useEffect(() => {
+  localStorage.setItem("rrfsContours", JSON.stringify(rrfsChart));
+}, [rrfsChart]);
+
+useEffect(() => {
   localStorage.setItem("goesRenderStyle", goesRenderStyle);
 }, [goesRenderStyle]);
 
@@ -5627,6 +6725,37 @@ useEffect(() => {
 useEffect(() => {
   if (!showCursorDiagnostics) setCursorProbe(null);
 }, [showCursorDiagnostics]);
+
+useEffect(() => {
+  if (!showCursorDiagnostics) return;
+  if (!cursorProbe) return;
+  const map = mapRef.current?.getMap();
+  if (!map) return;
+
+  const refreshProbeFromScreenPoint = () => {
+    const ll = map.unproject([cursorProbe.x, cursorProbe.y]);
+    setCursorProbe((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        lng: ll.lng,
+        lat: ll.lat,
+      };
+    });
+  };
+
+  map.on("move", refreshProbeFromScreenPoint);
+  map.on("zoom", refreshProbeFromScreenPoint);
+  map.on("moveend", refreshProbeFromScreenPoint);
+  map.on("zoomend", refreshProbeFromScreenPoint);
+
+  return () => {
+    map.off("move", refreshProbeFromScreenPoint);
+    map.off("zoom", refreshProbeFromScreenPoint);
+    map.off("moveend", refreshProbeFromScreenPoint);
+    map.off("zoomend", refreshProbeFromScreenPoint);
+  };
+}, [showCursorDiagnostics, cursorProbe?.x, cursorProbe?.y]);
 
 useEffect(() => {
   const onKey = (e: KeyboardEvent) => {
@@ -5667,6 +6796,10 @@ useEffect(() => {
   const raf = requestAnimationFrame(() => {
     // analysis overlay
     if (anyAnalysisLikeOverlayOn) drawAnalysisOverlay();
+    if (anyRrfsContourOn) drawRrfsFillOverlay();
+    if (anyRrfsContourOn) drawRrfsContourOverlay();
+    if (anyRrfsContourOn) drawRrfsWindOverlay();
+    if (anyRrfsContourOn) drawRrfsLabelOverlay();
 
     // station plots / weather glyphs
     if (showStations && (displayMode === "plots" || displayMode === "weather")) drawStationPlots();
@@ -5681,6 +6814,11 @@ useEffect(() => {
   obs,                 // redraw when the frame changes
   anyAnalysisLikeOverlayOn,
   drawAnalysisOverlay,
+  anyRrfsContourOn,
+  drawRrfsFillOverlay,
+  drawRrfsContourOverlay,
+  drawRrfsWindOverlay,
+  drawRrfsLabelOverlay,
   showStations,
   displayMode,
   drawStationPlots,
@@ -5698,11 +6836,60 @@ useEffect(() => {
           </header>
           <div className="header-controls">
             <div className="header-row header-row-top">
-            <div className="analysis-control">
+            <div
+              className={`analysis-control ${openHeaderMenu === "analysis" ? "menu-open" : ""}`}
+            >
               <div className="analysis-title">Objective Analysis</div>
-              <details className="analysis-dropdown">
-                <summary>Analysis Layers</summary>
+              <div className={`analysis-dropdown ${openHeaderMenu === "analysis" ? "is-open" : ""}`}>
+                <button
+                  type="button"
+                  className="analysis-dropdown-trigger"
+                  onClick={() => setOpenHeaderMenu((current) => (current === "analysis" ? null : "analysis"))}
+                >
+                  Analysis Layers
+                </button>
+                {openHeaderMenu === "analysis" && (
                 <div className="analysis-menu">
+                  <div className="analysis-subsection-title">Surface Stations</div>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={showStations}
+                      onChange={(e) => setShowStations(e.target.checked)}
+                    />
+                    Show Surface Stations
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="surface-stations-mode"
+                      checked={displayMode === "plots"}
+                      onChange={() => setSurfaceObsMode("plots")}
+                      disabled={!showStations}
+                    />
+                    Station Plots
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="surface-stations-mode"
+                      checked={displayMode === "dots"}
+                      onChange={() => setSurfaceObsMode("dots")}
+                      disabled={!showStations}
+                    />
+                    Colored Flight Rule
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="surface-stations-mode"
+                      checked={displayMode === "weather"}
+                      onChange={() => setSurfaceObsMode("weather")}
+                      disabled={!showStations}
+                    />
+                    Present Wx Symbols
+                  </label>
+                  <div className="analysis-subsection-title">Isopleths</div>
                   <label>
                     <input
                       type="checkbox"
@@ -5737,63 +6924,69 @@ useEffect(() => {
                     />
                     Wind (Objective)
                   </label>
-                  <details className="view-submenu">
-                    <summary>Filled Analysis</summary>
-                    <div className="view-submenu-content">
-                      <label>
-                        <input
-                          type="radio"
-                          name="analysis-fill"
-                          checked={analysisFill === "none"}
-                          onChange={() => setAnalysisFill("none")}
-                        />
-                        Off
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name="analysis-fill"
-                          checked={analysisFill === "windSpeed"}
-                          onChange={() => setAnalysisFill("windSpeed")}
-                        />
-                        Wind Speed
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name="analysis-fill"
-                          checked={analysisFill === "ceiling"}
-                          onChange={() => setAnalysisFill("ceiling")}
-                        />
-                        Ceiling (&le;050)
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name="analysis-fill"
-                          checked={analysisFill === "visibility"}
-                          onChange={() => setAnalysisFill("visibility")}
-                        />
-                        Visibility (&le;6SM)
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name="analysis-fill"
-                          checked={analysisFill === "relativeHumidity"}
-                          onChange={() => setAnalysisFill("relativeHumidity")}
-                        />
-                        Relative Humidity
-                      </label>
-                    </div>
-                  </details>
+                  <div className="analysis-subsection-title">Filled Analysis</div>
+                  <label>
+                    <input
+                      type="radio"
+                      name="analysis-fill"
+                      checked={analysisFill === "none"}
+                      onChange={() => setAnalysisFill("none")}
+                    />
+                    Off
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="analysis-fill"
+                      checked={analysisFill === "windSpeed"}
+                      onChange={() => setAnalysisFill("windSpeed")}
+                    />
+                    Wind Speed
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="analysis-fill"
+                      checked={analysisFill === "ceiling"}
+                      onChange={() => setAnalysisFill("ceiling")}
+                    />
+                    Ceiling (&le;050)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="analysis-fill"
+                      checked={analysisFill === "visibility"}
+                      onChange={() => setAnalysisFill("visibility")}
+                    />
+                    Visibility (&le;6SM)
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="analysis-fill"
+                      checked={analysisFill === "relativeHumidity"}
+                      onChange={() => setAnalysisFill("relativeHumidity")}
+                    />
+                    Relative Humidity
+                  </label>
                 </div>
-              </details>
+                )}
+              </div>
             </div>
-            <div className="analysis-control">
+            <div
+              className={`analysis-control ${openHeaderMenu === "derived" ? "menu-open" : ""}`}
+            >
               <div className="analysis-title">Derived Fields</div>
-              <details className="analysis-dropdown">
-                <summary>Derived Fields</summary>
+              <div className={`analysis-dropdown ${openHeaderMenu === "derived" ? "is-open" : ""}`}>
+                <button
+                  type="button"
+                  className="analysis-dropdown-trigger"
+                  onClick={() => setOpenHeaderMenu((current) => (current === "derived" ? null : "derived"))}
+                >
+                  Derived Fields
+                </button>
+                {openHeaderMenu === "derived" && (
                 <div className="analysis-menu">
                   <div className="analysis-subsection-title">Moisture</div>
                   <label>
@@ -5827,12 +7020,95 @@ useEffect(() => {
                     Moisture Convergence (Contours)
                   </label>
                 </div>
-              </details>
+                )}
+              </div>
             </div>
-            <div className="analysis-control">
+            <div
+              className={`analysis-control ${openHeaderMenu === "rrfs" ? "menu-open" : ""}`}
+            >
+              <div className="analysis-title">RRFS Analysis</div>
+              <div className={`analysis-dropdown ${openHeaderMenu === "rrfs" ? "is-open" : ""}`}>
+                <button
+                  type="button"
+                  className="analysis-dropdown-trigger"
+                  onClick={() => setOpenHeaderMenu((current) => (current === "rrfs" ? null : "rrfs"))}
+                >
+                  RRFS Analysis
+                </button>
+                {openHeaderMenu === "rrfs" && (
+                <div className="analysis-menu">
+                  <div className="analysis-subsection-title">Upper-Level Charts</div>
+                  <label>
+                    <input
+                      type="radio"
+                      name="rrfs-chart"
+                      checked={rrfsChart === "none"}
+                      onChange={() => setRrfsChart("none")}
+                    />
+                    Off
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="rrfs-chart"
+                      checked={rrfsChart === "925mb"}
+                      onChange={() => setRrfsChart("925mb")}
+                    />
+                    925 MB Analysis
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="rrfs-chart"
+                      checked={rrfsChart === "850mb"}
+                      onChange={() => setRrfsChart("850mb")}
+                    />
+                    850 MB Analysis
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="rrfs-chart"
+                      checked={rrfsChart === "700mb"}
+                      onChange={() => setRrfsChart("700mb")}
+                    />
+                    700 MB Analysis
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="rrfs-chart"
+                      checked={rrfsChart === "500mb"}
+                      onChange={() => setRrfsChart("500mb")}
+                    />
+                    500 MB Analysis
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="rrfs-chart"
+                      checked={rrfsChart === "300mb"}
+                      onChange={() => setRrfsChart("300mb")}
+                    />
+                    300 MB Analysis
+                  </label>
+                </div>
+                )}
+              </div>
+            </div>
+            <div
+              className={`analysis-control ${openHeaderMenu === "mrms" ? "menu-open" : ""}`}
+            >
               <div className="analysis-title">MRMS</div>
-              <details className="analysis-dropdown">
-                <summary>MRMS Fields</summary>
+              <div className={`analysis-dropdown ${openHeaderMenu === "mrms" ? "is-open" : ""}`}>
+                <button
+                  type="button"
+                  className="analysis-dropdown-trigger"
+                  onClick={() => setOpenHeaderMenu((current) => (current === "mrms" ? null : "mrms"))}
+                >
+                  MRMS Fields
+                </button>
+                {openHeaderMenu === "mrms" && (
                 <div className="analysis-menu">
                   <label>
                     <input
@@ -5907,12 +7183,22 @@ useEffect(() => {
                     4-Hour Maximum Estimated Hail Size (MESH) (in)
                   </label>
                 </div>
-              </details>
+                )}
+              </div>
             </div>
-            <div className="analysis-control">
+            <div
+              className={`analysis-control ${openHeaderMenu === "goes" ? "menu-open" : ""}`}
+            >
               <div className="analysis-title">GOES Satellite</div>
-              <details className="analysis-dropdown">
-                <summary>GOES Satellite</summary>
+              <div className={`analysis-dropdown ${openHeaderMenu === "goes" ? "is-open" : ""}`}>
+                <button
+                  type="button"
+                  className="analysis-dropdown-trigger"
+                  onClick={() => setOpenHeaderMenu((current) => (current === "goes" ? null : "goes"))}
+                >
+                  GOES Satellite
+                </button>
+                {openHeaderMenu === "goes" && (
                 <div className="analysis-menu goes-menu">
                   <label>
                     <input
@@ -5999,12 +7285,22 @@ useEffect(() => {
                     </div>
                   </details>
                 </div>
-              </details>
+                )}
+              </div>
             </div>
-            <div className="analysis-control">
+            <div
+              className={`analysis-control ${openHeaderMenu === "nws" ? "menu-open" : ""}`}
+            >
               <div className="analysis-title">NWS Products</div>
-              <details className="analysis-dropdown">
-                <summary>NWS Products</summary>
+              <div className={`analysis-dropdown ${openHeaderMenu === "nws" ? "is-open" : ""}`}>
+                <button
+                  type="button"
+                  className="analysis-dropdown-trigger"
+                  onClick={() => setOpenHeaderMenu((current) => (current === "nws" ? null : "nws"))}
+                >
+                  NWS Products
+                </button>
+                {openHeaderMenu === "nws" && (
                 <div className="analysis-menu">
                   <label>
                     <input
@@ -6056,12 +7352,22 @@ useEffect(() => {
                     WPC Mesoscale Discussions
                   </label>
                 </div>
-              </details>
+                )}
+              </div>
             </div>
-            <div className="geography-control">
+            <div
+              className={`geography-control ${openHeaderMenu === "geography" ? "menu-open" : ""}`}
+            >
               <div className="geography-title">Geographies</div>
-              <details className="geography-dropdown">
-                <summary>Geographic Layers</summary>
+              <div className={`geography-dropdown ${openHeaderMenu === "geography" ? "is-open" : ""}`}>
+                <button
+                  type="button"
+                  className="analysis-dropdown-trigger geography-dropdown-trigger"
+                  onClick={() => setOpenHeaderMenu((current) => (current === "geography" ? null : "geography"))}
+                >
+                  Geographic Layers
+                </button>
+                {openHeaderMenu === "geography" && (
                 <div className="geography-menu">
                   <label>
                     <input
@@ -6147,7 +7453,8 @@ useEffect(() => {
                     </div>
                   </details>
                 </div>
-              </details>
+                )}
+              </div>
             </div>
             </div>
             <div className="header-row header-row-bottom">
@@ -6275,6 +7582,32 @@ useEffect(() => {
                 GLM {getGlmProductLabel(glmProduct)} unavailable: {glmError}
               </div>
             )}
+            {rrfsChart !== "none" && rrfsMeta?.stale_warning && (
+              <div className="mrms-warning-overlay">
+                {getRrfsChartLabel(rrfsChart)} warning: matched field is {Math.round(rrfsMeta.age_minutes)} minutes old
+                ({rrfsMeta.matched_time ? formatZulu(rrfsMeta.matched_time) : "—"}).
+              </div>
+            )}
+            {rrfsChart !== "none" && rrfsError && (
+              <div className="mrms-warning-overlay mrms-warning-error">
+                {getRrfsChartLabel(rrfsChart)} unavailable: {rrfsError}
+              </div>
+            )}
+            {anyRrfsContourOn && (
+              <canvas
+                ref={rrfsFillCanvasRef}
+                className="rrfs-fill-canvas"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                  zIndex: 14,
+                }}
+              />
+            )}
             {nwsOverlays.wpcSurface && wpcSurface?.stale_warning && (
               <div className="mrms-warning-overlay">
                 WPC surface analysis warning: latest parsed valid time is {wpcSurface.valid_time ? formatZulu(wpcSurface.valid_time) : "unknown"}
@@ -6322,6 +7655,38 @@ useEffect(() => {
               />
             )}
 
+            {anyRrfsContourOn && (
+              <canvas
+                ref={rrfsContourCanvasRef}
+                className="rrfs-contour-canvas"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                  zIndex: 15,
+                }}
+              />
+            )}
+
+            {anyRrfsContourOn && (
+              <canvas
+                ref={rrfsWindCanvasRef}
+                className="rrfs-wind-canvas"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                  zIndex: 16,
+                }}
+              />
+            )}
+
             {showStations && (displayMode === "plots" || displayMode === "weather") && (
               <canvas
                 ref={canvasRef}
@@ -6338,7 +7703,7 @@ useEffect(() => {
               />
             )}
 
-            {anyAnalysisLikeOverlayOn && (
+            {(anyAnalysisLikeOverlayOn || anyRrfsContourOn) && (
               <canvas
                 ref={analysisLabelCanvasRef}
                 className="analysis-label-canvas"
@@ -6354,7 +7719,7 @@ useEffect(() => {
               />
             )}
 
-            {!legendsCollapsed && (activeFillLegendCards.length > 0 || Boolean(mrmsGradientLegend) || Boolean(goesGradientLegend)) && (
+            {!legendsCollapsed && (activeFillLegendCards.length > 0 || Boolean(mrmsGradientLegend) || Boolean(goesGradientLegend) || Boolean(rrfsGradientLegend)) && (
               <div className="analysis-legends">
                 {activeFillLegendCards.map((card) => (
                   <div className="analysis-legend" key={`fill-legend-${card.title}`}>
@@ -6383,8 +7748,8 @@ useEffect(() => {
                 </div>
                 )}
                 {goesGradientLegend && (
-                <div className="analysis-legend">
-                  <div className="wind-fill-legend-title">{goesGradientLegend.title}</div>
+                  <div className="analysis-legend">
+                    <div className="wind-fill-legend-title">{goesGradientLegend.title}</div>
                   <div className="mrms-gradient-legend-body">
                     <div className="mrms-gradient-bar" style={{ background: goesGradientLegend.gradientCss }} />
                     <div className="mrms-gradient-labels">
@@ -6393,7 +7758,20 @@ useEffect(() => {
                       ))}
                     </div>
                   </div>
-                </div>
+                  </div>
+                )}
+                {rrfsGradientLegend && (
+                  <div className="analysis-legend">
+                    <div className="wind-fill-legend-title">{rrfsGradientLegend.title}</div>
+                    <div className="mrms-gradient-legend-body">
+                      <div className="mrms-gradient-bar" style={{ background: rrfsGradientLegend.gradientCss }} />
+                      <div className="mrms-gradient-labels">
+                        {rrfsGradientLegend.labels.map((lbl) => (
+                          <span key={`rrfs-gradient-${lbl}`}>{lbl}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -6996,14 +8374,6 @@ useEffect(() => {
                 <label className="options-check">
                   <input
                     type="checkbox"
-                    checked={showStations}
-                    onChange={(e) => setShowStations(e.target.checked)}
-                  />
-                  Show stations
-                </label>
-                <label className="options-check">
-                  <input
-                    type="checkbox"
                     checked={legendsCollapsed}
                     onChange={(e) => setLegendsCollapsed(e.target.checked)}
                   />
@@ -7018,17 +8388,6 @@ useEffect(() => {
                   <option value="sparse">Sparse</option>
                   <option value="medium">Medium</option>
                   <option value="dense">Dense</option>
-                </select>
-                <label className="options-label">Surface Observation Mode</label>
-                <select
-                  className="surface-obs-select"
-                  value={displayMode}
-                  onChange={(e) => setSurfaceObsMode(e.target.value as DisplayMode)}
-                  disabled={!showStations}
-                >
-                  <option value="plots">Station Plots</option>
-                  <option value="dots">Colored Flight Rule</option>
-                  <option value="weather">Weather Symbols Only</option>
                 </select>
               </div>
 

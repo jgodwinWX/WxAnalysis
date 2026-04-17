@@ -796,6 +796,7 @@
   align-items: flex-start;
   gap: 6px;
   position: relative;
+  z-index: 1;
 }
 
 .geography-control {
@@ -804,7 +805,12 @@
   align-items: flex-start;
   gap: 6px;
   position: relative;
-  z-index: 45;
+  z-index: 1;
+}
+
+.analysis-control.menu-open,
+.geography-control.menu-open {
+  z-index: 120;
 }
 
 .analysis-title {
@@ -819,6 +825,31 @@
   width: 220px;
   position: relative;
   z-index: 55;
+}
+
+.analysis-dropdown.is-open,
+.geography-dropdown.is-open {
+  z-index: 130;
+}
+
+.analysis-dropdown-trigger {
+  width: 100%;
+  text-align: left;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.82);
+  color: #e2e8f0;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.analysis-dropdown.is-open .analysis-dropdown-trigger,
+.geography-dropdown.is-open .analysis-dropdown-trigger {
+  border-color: rgba(96, 165, 250, 0.55);
 }
 
 .analysis-dropdown summary {
@@ -910,6 +941,10 @@
   width: 220px;
   position: relative;
   z-index: 55;
+}
+
+.geography-dropdown-trigger {
+  width: 100%;
 }
 
 .geography-dropdown summary {
