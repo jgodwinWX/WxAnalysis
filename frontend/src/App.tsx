@@ -2253,24 +2253,7 @@ const densityPx = useMemo(() => {
     const saved = localStorage.getItem("glmProduct");
     return isValidGlmProduct(saved) ? saved : "none";
   });
-  const [rrfsChart, setRrfsChart] = useState<RrfsChartId>(() => {
-    const saved = localStorage.getItem("rrfsContours");
-    if (saved) {
-      try {
-        if (saved === "\"925mb\"" || saved === "\"850mb\"" || saved === "\"700mb\"" || saved === "\"500mb\"" || saved === "\"300mb\"" || saved === "\"none\"") {
-          const parsed = JSON.parse(saved) as RrfsChartId;
-          return parsed;
-        }
-        const parsed = JSON.parse(saved) as Partial<Record<"analysis925mb" | "analysis850mb" | "analysis700mb" | "analysis500mb" | "analysis300mb" | "t2m", boolean>>;
-        if (parsed.analysis300mb === true) return "300mb";
-        if (parsed.analysis500mb === true) return "500mb";
-        if (parsed.analysis700mb === true) return "700mb";
-        if (parsed.analysis850mb === true) return "850mb";
-        if (parsed.analysis925mb === true || parsed.t2m === true) return "925mb";
-      } catch {}
-    }
-    return "none";
-  });
+  const [rrfsChart] = useState<RrfsChartId>("none");
   const [goesRenderStyle, setGoesRenderStyle] = useState<GoesRenderStyle>(() => {
     const saved = localStorage.getItem("goesRenderStyle");
     return saved === "grayscale" || saved === "enhanced" ? saved : "enhanced";
@@ -2358,6 +2341,10 @@ const densityPx = useMemo(() => {
   const [wpcSurface, setWpcSurface] = useState<WpcSurfaceResponse | null>(null);
   const [wpcError, setWpcError] = useState<string | null>(null);
   const [isOpsOpen, setIsOpsOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.removeItem("rrfsContours");
+  }, []);
   const [opsSummary, setOpsSummary] = useState<OpsSummaryResponse | null>(null);
   const [opsError, setOpsError] = useState<string | null>(null);
   const [opsLoading, setOpsLoading] = useState(false);
@@ -7018,79 +7005,6 @@ useEffect(() => {
                       }
                     />
                     Moisture Convergence (Contours)
-                  </label>
-                </div>
-                )}
-              </div>
-            </div>
-            <div
-              className={`analysis-control ${openHeaderMenu === "rrfs" ? "menu-open" : ""}`}
-            >
-              <div className="analysis-title">RRFS Analysis</div>
-              <div className={`analysis-dropdown ${openHeaderMenu === "rrfs" ? "is-open" : ""}`}>
-                <button
-                  type="button"
-                  className="analysis-dropdown-trigger"
-                  onClick={() => setOpenHeaderMenu((current) => (current === "rrfs" ? null : "rrfs"))}
-                >
-                  RRFS Analysis
-                </button>
-                {openHeaderMenu === "rrfs" && (
-                <div className="analysis-menu">
-                  <div className="analysis-subsection-title">Upper-Level Charts</div>
-                  <label>
-                    <input
-                      type="radio"
-                      name="rrfs-chart"
-                      checked={rrfsChart === "none"}
-                      onChange={() => setRrfsChart("none")}
-                    />
-                    Off
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="rrfs-chart"
-                      checked={rrfsChart === "925mb"}
-                      onChange={() => setRrfsChart("925mb")}
-                    />
-                    925 MB Analysis
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="rrfs-chart"
-                      checked={rrfsChart === "850mb"}
-                      onChange={() => setRrfsChart("850mb")}
-                    />
-                    850 MB Analysis
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="rrfs-chart"
-                      checked={rrfsChart === "700mb"}
-                      onChange={() => setRrfsChart("700mb")}
-                    />
-                    700 MB Analysis
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="rrfs-chart"
-                      checked={rrfsChart === "500mb"}
-                      onChange={() => setRrfsChart("500mb")}
-                    />
-                    500 MB Analysis
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="rrfs-chart"
-                      checked={rrfsChart === "300mb"}
-                      onChange={() => setRrfsChart("300mb")}
-                    />
-                    300 MB Analysis
                   </label>
                 </div>
                 )}

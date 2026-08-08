@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import threading
 import re
 
@@ -30,6 +30,50 @@ def _iso_z(dt: datetime) -> str:
 FRONT_FEATURES = {"WARM", "COLD", "STNRY", "OCFNT", "TROF", "DRYLINE"}
 CENTER_FEATURES = {"HIGH", "LOW"}
 DRYLINE_TOKENS = {"DRY", "DRYLN", "DRYLNE", "DRYLINE"}
+
+
+def _normalize_wpc_bulletin_text(bulletin_text: str) -> str:
+    # Some WPC bulletins occasionally include a stray minus sign between the
+    # latitude and longitude halves of a compact coordinate token, e.g.
+    # "619-1795" instead of "6191795". MetPy's parser expects the compact form.
+    return re.sub(r"\b(\d{3})-(\d{4})\b", r"\1\2", bulletin_text)
+
+
+def _normalize_lon_lat(lon: Any, lat: Any) -> Tuple[float, float]:
+    lon_f = float(lon)
+    lat_f = float(lat)
+    while abs(lon_f) > 180.0:
+        lon_f /= 10.0
+    while abs(lat_f) > 90.0:
+        lat_f /= 10.0
+    return lon_f, lat_f
+
+
+def _normalize_geometry_geojson(geometry: Dict[str, Any]) -> Dict[str, Any]:
+    gtype = str(geometry.get("type", ""))
+    coords = geometry.get("coordinates")
+    if coords is None:
+        return geometry
+
+    def normalize_pair(pair: Any) -> List[float]:
+        if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+            return list(pair) if isinstance(pair, (list, tuple)) else [pair]
+        lon_f, lat_f = _normalize_lon_lat(pair[0], pair[1])
+        rest = list(pair[2:]) if len(pair) > 2 else []
+        return [lon_f, lat_f, *rest]
+
+    if gtype == "Point":
+        out_coords = normalize_pair(coords)
+    elif gtype == "LineString":
+        out_coords = [normalize_pair(pair) for pair in coords]
+    elif gtype == "MultiLineString":
+        out_coords = [[normalize_pair(pair) for pair in line] for line in coords]
+    else:
+        return geometry
+
+    out = dict(geometry)
+    out["coordinates"] = out_coords
+    return out
 
 
 @dataclass
@@ -69,7 +113,7 @@ class WpcSurfaceService:
             if self._cache and (now - self._cache.fetched_at) < self.refresh_ttl:
                 return self._cache.payload
 
-        bulletin = self._fetch_bulletin_text()
+        bulletin = _normalize_wpc_bulletin_text(self._fetch_bulletin_text())
         parsed = parse_wpc_surface_bulletin(BytesIO(bulletin.encode("utf-8")))
         dryline_rows = self._extract_dryline_rows(bulletin)
         if dryline_rows:
@@ -246,6 +290,7 @@ class WpcSurfaceService:
             geom_json = getattr(geom, "__geo_interface__", None)
             if not geom_json:
                 continue
+            geom_json = _normalize_geometry_geojson(geom_json)
 
             strength_raw = row.get("strength")
             strength = None

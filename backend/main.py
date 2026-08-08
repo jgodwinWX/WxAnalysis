@@ -32,7 +32,6 @@ from metar_fetcher import (
 from goes_service import GoesService
 from glm_service import GlmService
 from mrms_service import MrmsService
-from rrfs_service import RrfsService
 from wpc_service import WpcSurfaceService
 from hazard_service import HazardService
 
@@ -104,7 +103,6 @@ _data_root = Path(__file__).resolve().parent.parent / "data"
 _mrms_service = MrmsService(cache_root=_data_root / "mrms_cache")
 _goes_service = GoesService(cache_root=_data_root / "goes_cache")
 _glm_service = GlmService(cache_root=_data_root / "glm_cache")
-_rrfs_service = RrfsService(cache_root=_data_root / "rrfs_cache")
 _wpc_service = WpcSurfaceService()
 _hazard_service = HazardService()
 _snapshot_db_path = _data_root / "snapshots.db"
@@ -119,7 +117,6 @@ _diag_sources: Dict[str, Dict[str, Any]] = {
     "mrms:etop18": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "mrms:rotationll240": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "mrms:rotationml240": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
-    "rrfs:t2m": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "glm:east-conus-fed": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
     "glm:west-conus-fed": {"success": 0, "failure": 0, "last_success": None, "last_failure": None, "last_error": None, "last_duration_ms": None},
 }
@@ -860,35 +857,6 @@ def _ops_collect_freshness() -> dict:
                 "failure": int(diag.get("failure", 0)),
             }
 
-    def rrfs_field_freshness(field: str) -> dict:
-        source = f"rrfs:{field}"
-        try:
-            fresh = _rrfs_service.get_freshness(field)
-            with _diag_lock:
-                diag = dict(_diag_sources.get(source, {}))
-            return {
-                **fresh,
-                "last_success": diag.get("last_success"),
-                "last_failure": diag.get("last_failure"),
-                "last_error": diag.get("last_error"),
-                "success": int(diag.get("success", 0)),
-                "failure": int(diag.get("failure", 0)),
-            }
-        except Exception as e:
-            with _diag_lock:
-                diag = dict(_diag_sources.get(source, {}))
-            return {
-                "status": "error",
-                "latest_time": None,
-                "latest_age_minutes": None,
-                "error": str(e),
-                "last_success": diag.get("last_success"),
-                "last_failure": diag.get("last_failure"),
-                "last_error": diag.get("last_error"),
-                "success": int(diag.get("success", 0)),
-                "failure": int(diag.get("failure", 0)),
-            }
-
     wpc_latest: Dict[str, Any]
     try:
         wpc = _wpc_service.get_latest()
@@ -938,9 +906,6 @@ def _ops_collect_freshness() -> dict:
             "east_conus_fed": glm_product_freshness("east-conus-fed"),
             "west_conus_fed": glm_product_freshness("west-conus-fed"),
         },
-        "rrfs": {
-            "t2m": rrfs_field_freshness("t2m"),
-        },
         "wpc": wpc_latest,
     }
 
@@ -963,7 +928,6 @@ def _ops_collect_health() -> dict:
         "station_count": len(_latest_obs),
         "mrms_cache": _mrms_service.cache_usage(),
         "glm_cache": _glm_service.cache_usage(),
-        "rrfs_cache": _rrfs_service.cache_usage(),
         "storage_total_bytes": int(((storage.get("components") or {}).get("data_root") or {}).get("bytes", 0)),
         "metar_latest_age_minutes": _age_minutes_from_iso(_iso_z(_last_update) if _last_update else None),
     }
@@ -1170,163 +1134,6 @@ async def refresh_obs() -> dict:
         "station_count": len(_latest_obs),
         "last_update": _last_update.isoformat() if _last_update else None,
     }
-
-
-@app.get("/api/rrfs/meta")
-def rrfs_meta(
-    field: str = Query(default="t2m", description="RRFS field id"),
-    time: str = Query(..., description="Observation-matched UTC ISO time"),
-) -> dict:
-    source = f"rrfs:{(field or '').strip().lower()}"
-    t0 = pytime.perf_counter()
-    try:
-        target = _parse_iso_z(time)
-    except Exception:
-        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
-
-    try:
-        out = _rrfs_service.get_meta(field, target)
-        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
-        return out
-    except ValueError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("RRFS metadata failed for field=%s time=%s", field, time)
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=503, detail=f"Failed to fetch RRFS metadata: {e}")
-
-
-@app.get("/api/rrfs/chart")
-def rrfs_chart(
-    chart: str = Query(default="925mb", description="RRFS chart id"),
-    time: str = Query(..., description="Observation-matched UTC ISO time"),
-) -> dict:
-    source = f"rrfs-chart:{(chart or '').strip().lower()}"
-    t0 = pytime.perf_counter()
-    try:
-        target = _parse_iso_z(time)
-    except Exception:
-        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
-
-    try:
-        out = _rrfs_service.get_chart_bundle(chart, target)
-        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
-        return out
-    except ValueError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("RRFS chart failed for chart=%s time=%s", chart, time)
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=503, detail=f"Failed to build RRFS chart: {e}")
-
-
-@app.get("/api/rrfs/contours")
-def rrfs_contours(
-    field: str = Query(default="t2m", description="RRFS field id"),
-    time: str = Query(..., description="Observation-matched UTC ISO time"),
-    unit: str = Query(default="F", description="Display temperature unit"),
-) -> dict:
-    source = f"rrfs:{(field or '').strip().lower()}"
-    t0 = pytime.perf_counter()
-    try:
-        target = _parse_iso_z(time)
-    except Exception:
-        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
-
-    try:
-        out = _rrfs_service.get_contours(field, target, unit=unit)
-        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
-        return out
-    except ValueError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("RRFS contours failed for field=%s time=%s unit=%s", field, time, unit)
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=503, detail=f"Failed to build RRFS contours: {e}")
-
-
-@app.get("/api/rrfs/chart_value")
-def rrfs_chart_value(
-    chart: str = Query(default="925mb", description="RRFS chart id"),
-    time: str = Query(..., description="Observation-matched UTC ISO time"),
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
-) -> dict:
-    source = f"rrfs-chart:{(chart or '').strip().lower()}"
-    t0 = pytime.perf_counter()
-    if lat < -90 or lat > 90 or lon < -180 or lon > 180:
-        _diag_mark_failure(source, ValueError("lat/lon out of range"), (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail="lat/lon out of range")
-    try:
-        target = _parse_iso_z(time)
-    except Exception:
-        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
-
-    try:
-        out = _rrfs_service.get_chart_value(chart, target, lat=lat, lon=lon)
-        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
-        return out
-    except ValueError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("RRFS chart value failed for chart=%s time=%s lat=%s lon=%s", chart, time, lat, lon)
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=503, detail=f"Failed to sample RRFS chart: {e}")
-
-
-@app.get("/api/rrfs/value")
-def rrfs_value(
-    field: str = Query(default="t2m", description="RRFS field id"),
-    time: str = Query(..., description="Observation-matched UTC ISO time"),
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
-    unit: str = Query(default="F", description="Display temperature unit"),
-) -> dict:
-    source = f"rrfs:{(field or '').strip().lower()}"
-    t0 = pytime.perf_counter()
-    if lat < -90 or lat > 90 or lon < -180 or lon > 180:
-        _diag_mark_failure(source, ValueError("lat/lon out of range"), (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail="lat/lon out of range")
-    try:
-        target = _parse_iso_z(time)
-    except Exception:
-        _diag_mark_failure(source, ValueError("invalid time format"), (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
-
-    try:
-        out = _rrfs_service.get_value(field, target, lat=lat, lon=lon, unit=unit)
-        _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
-        return out
-    except ValueError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("RRFS value failed for field=%s time=%s lat=%s lon=%s", field, time, lat, lon)
-        _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
-        raise HTTPException(status_code=503, detail=f"Failed to sample RRFS value: {e}")
 
 
 @app.get("/api/geography/artcc")
