@@ -10,6 +10,7 @@ import math
 import os
 import re
 import threading
+import gzip
 
 import requests
 
@@ -243,10 +244,24 @@ class RrfsService:
         self._listing_cache: Dict[str, Tuple[datetime, List[RrfsObject]]] = {}
         self._processed_cache: "OrderedDict[str, ProcessedGrid]" = OrderedDict()
         self._chart_cache: "OrderedDict[str, ProcessedChart]" = OrderedDict()
+        self._bundle_cache: "OrderedDict[str, dict]" = OrderedDict()
         self._path_locks: Dict[str, threading.Lock] = {}
         self._crs_to_analysis = None
         self._crs_to_ll = None
         self._grid_bounds_m = None
+        self._warm_status: Dict[str, Any] = {
+            "state": "idle",
+            "last_started_at": None,
+            "last_finished_at": None,
+            "last_requested_time": None,
+            "last_target_valid_time": None,
+            "last_successful_valid_time": None,
+            "last_duration_seconds": None,
+            "current_chart": None,
+            "charts_completed": [],
+            "charts_failed": [],
+            "last_error": None,
+        }
 
     def get_meta(self, field: str, requested_time: datetime) -> dict:
         cfg = self._field(field)
@@ -344,20 +359,9 @@ class RrfsService:
         cfg = self._chart(chart)
         now = datetime.now(timezone.utc)
         selection = self._select_match_for_config(cfg, requested_time, now=now)
-        processed = self._get_processed_chart(cfg, selection.matched)
-        contours = self._build_upper_air_contours_geojson(cfg, processed)
-        winds = self._build_upper_air_wind_geojson(cfg, processed)
+        payload = self._get_chart_bundle_payload(cfg, selection.matched)
         out = self.get_chart_meta(chart, requested_time)
-        out["contours"] = contours
-        out["winds"] = winds
-        if cfg.id == "850mb":
-            out["wind_fill"] = self._build_upper_air_wind_fill_geojson(cfg, processed)
-        elif cfg.id == "300mb":
-            out["wind_fill"] = self._build_upper_air_wind_fill_geojson(cfg, processed)
-        elif cfg.id == "700mb":
-            out["rh_fill"] = self._build_upper_air_rh_fill_geojson(cfg, processed)
-        elif cfg.id == "500mb":
-            out["vort_fill"] = self._build_upper_air_vort_fill_geojson(cfg, processed)
+        out.update(payload)
         return out
 
     def get_chart_value(self, chart: str, requested_time: datetime, lat: float, lon: float) -> dict:
@@ -408,6 +412,78 @@ class RrfsService:
             except OSError:
                 continue
         return {"path": str(self.cache_root), "bytes": total, "files": files}
+
+    def warm_status(self) -> dict:
+        with self._lock:
+            return json.loads(json.dumps(self._warm_status))
+
+    def supported_chart_ids(self) -> List[str]:
+        return list(RRFS_CHARTS.keys())
+
+    def warm_chart_bundles(self, requested_time: datetime, charts: Optional[List[str]] = None) -> dict:
+        started = datetime.now(timezone.utc)
+        chart_ids = charts or self.supported_chart_ids()
+        completed: List[str] = []
+        failed: List[dict] = []
+        with self._lock:
+            self._warm_status.update(
+                {
+                    "state": "warming",
+                    "last_started_at": _iso_z(started),
+                    "last_requested_time": _iso_z(requested_time),
+                    "last_target_valid_time": _iso_z(_round_to_hour_half_up(requested_time)),
+                    "current_chart": None,
+                    "charts_completed": [],
+                    "charts_failed": [],
+                    "last_error": None,
+                }
+            )
+        try:
+            for chart_id in chart_ids:
+                with self._lock:
+                    self._warm_status["current_chart"] = chart_id
+                try:
+                    cfg = self._chart(chart_id)
+                    selection = self._select_match_for_config(cfg, requested_time, now=started)
+                    self._get_chart_bundle_payload(cfg, selection.matched)
+                    completed.append(chart_id)
+                    with self._lock:
+                        self._warm_status["charts_completed"] = list(completed)
+                except Exception as e:
+                    failed.append({"chart": chart_id, "error": str(e)})
+                    with self._lock:
+                        self._warm_status["charts_failed"] = list(failed)
+                        self._warm_status["last_error"] = str(e)
+            finished = datetime.now(timezone.utc)
+            with self._lock:
+                self._warm_status.update(
+                    {
+                        "state": "ready" if not failed else ("error" if not completed else "partial"),
+                        "last_finished_at": _iso_z(finished),
+                        "last_duration_seconds": round((finished - started).total_seconds(), 2),
+                        "current_chart": None,
+                        "charts_completed": completed,
+                        "charts_failed": failed,
+                        "last_error": failed[0]["error"] if failed else None,
+                        "last_successful_valid_time": _iso_z(_round_to_hour_half_up(requested_time)) if completed else self._warm_status.get("last_successful_valid_time"),
+                    }
+                )
+            return self.warm_status()
+        except Exception as e:
+            finished = datetime.now(timezone.utc)
+            with self._lock:
+                self._warm_status.update(
+                    {
+                        "state": "error",
+                        "last_finished_at": _iso_z(finished),
+                        "last_duration_seconds": round((finished - started).total_seconds(), 2),
+                        "current_chart": None,
+                        "charts_completed": completed,
+                        "charts_failed": failed,
+                        "last_error": str(e),
+                    }
+                )
+            raise
 
     def _field(self, field: str) -> RrfsFieldConfig:
         cfg = RRFS_FIELDS.get((field or "").strip().lower())
@@ -708,6 +784,9 @@ class RrfsService:
     def _chart_raw_path(self, cfg: RrfsChartConfig, obj: RrfsObject) -> Path:
         return self.cache_root / cfg.id / "raw" / obj.cycle_time.strftime("%Y%m%d") / obj.cycle_time.strftime("%H") / os.path.basename(obj.key)
 
+    def _chart_bundle_cache_path(self, cfg: RrfsChartConfig, obj: RrfsObject) -> Path:
+        return self.cache_root / cfg.id / "bundles" / obj.cycle_time.strftime("%Y%m%d%H") / f"f{obj.forecast_hour:03d}.json.gz"
+
     def _get_processed_chart(self, cfg: RrfsChartConfig, obj: RrfsObject) -> ProcessedChart:
         cache_key = self._chart_cache_key(cfg, obj)
         with self._lock:
@@ -753,6 +832,46 @@ class RrfsService:
             while len(self._chart_cache) > 6:
                 self._chart_cache.popitem(last=False)
         return processed
+
+    def _get_chart_bundle_payload(self, cfg: RrfsChartConfig, obj: RrfsObject) -> dict:
+        cache_key = f"bundle:{self._chart_cache_key(cfg, obj)}"
+        with self._lock:
+            cached = self._bundle_cache.get(cache_key)
+            if cached is not None:
+                self._bundle_cache.move_to_end(cache_key)
+                return json.loads(json.dumps(cached))
+
+        path = self._chart_bundle_cache_path(cfg, obj)
+        if path.exists() and path.stat().st_size > 0:
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        else:
+            lock = self._path_lock(path)
+            with lock:
+                if path.exists() and path.stat().st_size > 0:
+                    with gzip.open(path, "rt", encoding="utf-8") as fh:
+                        payload = json.load(fh)
+                else:
+                    processed = self._get_processed_chart(cfg, obj)
+                    payload = {
+                        "contours": self._build_upper_air_contours_geojson(cfg, processed),
+                        "winds": self._build_upper_air_wind_geojson(cfg, processed),
+                    }
+                    if cfg.id in {"850mb", "300mb"}:
+                        payload["wind_fill"] = self._build_upper_air_wind_fill_geojson(cfg, processed)
+                    elif cfg.id == "700mb":
+                        payload["rh_fill"] = self._build_upper_air_rh_fill_geojson(cfg, processed)
+                    elif cfg.id == "500mb":
+                        payload["vort_fill"] = self._build_upper_air_vort_fill_geojson(cfg, processed)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with gzip.open(path, "wt", encoding="utf-8") as fh:
+                        json.dump(payload, fh, separators=(",", ":"))
+
+        with self._lock:
+            self._bundle_cache[cache_key] = payload
+            while len(self._bundle_cache) > 8:
+                self._bundle_cache.popitem(last=False)
+        return json.loads(json.dumps(payload))
 
     def _load_processed_chart(self, path: Path) -> ProcessedChart:
         if np is None:

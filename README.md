@@ -3,10 +3,10 @@ I will cut to the chase: most of this was written by Codex with review by me. My
 
 # Wx Mesoanalysis Dashboard
 
-Prototype web-based mesoanalysis dashboard for surface observations, objective analysis, derived fields, MRMS overlays, and selected NWS products.
+Prototype web-based observational mesoanalysis dashboard for surface observations, objective analysis, derived fields, MRMS/GOES/GLM overlays, and selected NWS products.
 
 The app has:
-- `backend/` FastAPI service (data ingest, history/cache, MRMS/WPC services, diagnostics APIs)
+- `backend/` FastAPI service (data ingest, history/cache, MRMS/GOES/GLM/WPC services, diagnostics APIs)
 - `frontend/` Vite + React + MapLibre client
 
 ## Current Feature Set
@@ -41,6 +41,10 @@ The app has:
   - Dewpoint change
   - Theta-e change
 
+Notes:
+- The app is intentionally observational-only.
+- RRFS/model-based upper-air analysis has been removed from the active workflow.
+
 ### MRMS (single-select within MRMS menu)
 - RALA reflectivity
 - Composite reflectivity
@@ -64,6 +68,7 @@ The app has:
 - Front render options:
   - Simple lines
   - Classic front symbols
+- WPC parser hardening for malformed compact coordinates in the live bulletin feed
 
 ### Geographies and Views
 - Geographic overlays:
@@ -81,7 +86,7 @@ The app has:
 - Optional legend inclusion in PNG export
 - Valid-time overlay saved into PNG export
 - API diagnostics dashboard (freshness, storage, errors, counters)
-- Cursor diagnostics panel (analysis/derived + MRMS value)
+- Cursor diagnostics panel (analysis/derived + MRMS/GOES/GLM value)
 
 ## Project Structure
 
@@ -144,6 +149,7 @@ Notes:
 - MRMS rendering requires `numpy`, `Pillow`, and `pygrib`.
 - GOES rendering requires `numpy`, `Pillow`, `netCDF4`, and `pyproj`.
 - GLM rendering requires `numpy`, `Pillow`, and `netCDF4`.
+- WPC surface parsing requires `metpy`, `pandas`, and `shapely`.
 - Weather symbol font/glyph APIs require `metpy`.
 
 ## Frontend Setup (Vite/React)
@@ -229,15 +235,17 @@ npm run build
 - `GET /api/glm/value?product=...&time=...&lat=...&lon=...`
 
 ### NWS/MetPy support
+- `GET /api/nws/wpc_surface`
 - `GET /api/nws/wpc_surface/latest`
 - `GET /api/metpy/wx_symbol_map`
 - `GET /api/metpy/wx_font`
 
 ## Operational Notes
 
-- This is a research/prototype tool, not an operational warning or aviation decision system.
+- This is a research/prototype observational tool, not an operational warning or aviation decision system.
 - Live-data services are external dependencies (IEM, NOAA MRMS, WPC); outages or delays upstream can affect display.
-- MRMS, GOES, and objective analysis can be displayed together.
+- MRMS, GOES, GLM, WPC, and objective analysis can be displayed together.
+- WPC surface analysis is parsed from the live coded bulletin feed and may require occasional parser adjustments if NOAA formatting changes.
 
 ## License
 
