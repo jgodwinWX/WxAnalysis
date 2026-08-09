@@ -1638,13 +1638,15 @@ function drawFrontSemicircle(
   color: string
 ) {
   // Rounded warm-front pip whose endpoints are anchored on the front line.
+  // Fill the dome, but only stroke the curved edge so the diameter does not
+  // read as a clipped flat cut through the symbol.
   const r = size * 0.72;
   const ex1 = x - tx * r;
   const ey1 = y - ty * r;
   const ex2 = x + tx * r;
   const ey2 = y + ty * r;
-  const cx = x + nx * r * 0.95;
-  const cy = y + ny * r * 0.95;
+  const cx = x + nx * r * 1.2;
+  const cy = y + ny * r * 1.2;
 
   ctx.beginPath();
   ctx.moveTo(ex1, ey1);
@@ -1652,8 +1654,12 @@ function drawFrontSemicircle(
   ctx.lineTo(ex1, ey1);
   ctx.closePath();
   ctx.fillStyle = color;
-  ctx.strokeStyle = color;
   ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(ex1, ey1);
+  ctx.quadraticCurveTo(cx, cy, ex2, ey2);
+  ctx.strokeStyle = color;
   ctx.stroke();
 }
 
@@ -2757,14 +2763,14 @@ const densityPx = useMemo(() => {
               sample.y,
               sample.tx,
               sample.ty,
-              nx,
-              ny,
+              -nx,
+              -ny,
               symbolSize * 1.5,
               "#dc2626"
             );
           } else if (frontType === "OCFNT") {
             if (idx % 2 === 0) {
-              drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#7c3aed");
+              drawFrontSemicircle(ctx, sample.x, sample.y, sample.tx, sample.ty, -nx, -ny, symbolSize, "#7c3aed");
             } else {
               drawFrontTriangle(ctx, sample.x, sample.y, sample.tx, sample.ty, nx, ny, symbolSize, "#7c3aed");
             }

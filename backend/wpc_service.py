@@ -16,9 +16,11 @@ except Exception:  # pragma: no cover
 
 try:
     from metpy.io import parse_wpc_surface_bulletin
+    import metpy.io.text as metpy_text
     from metpy.io.text import _decode_coords, _regroup_lines
 except Exception:  # pragma: no cover
     parse_wpc_surface_bulletin = None  # type: ignore
+    metpy_text = None  # type: ignore
     _decode_coords = None  # type: ignore
     _regroup_lines = None  # type: ignore
 
@@ -33,10 +35,44 @@ DRYLINE_TOKENS = {"DRY", "DRYLN", "DRYLNE", "DRYLINE"}
 
 
 def _normalize_wpc_bulletin_text(bulletin_text: str) -> str:
-    # Some WPC bulletins occasionally include a stray minus sign between the
-    # latitude and longitude halves of a compact coordinate token, e.g.
-    # "619-1795" instead of "6191795". MetPy's parser expects the compact form.
-    return re.sub(r"\b(\d{3})-(\d{4})\b", r"\1\2", bulletin_text)
+    # Normalize line endings and strip control characters copied into the raw feed.
+    return bulletin_text.replace("\r", "")
+
+
+def _decode_wpc_coords(coordinates: str) -> Tuple[float, float]:
+    """Decode WPC compact coordinates with optional embedded separators."""
+    token = str(coordinates).strip()
+    if not token:
+        raise ValueError("empty coordinate token")
+
+    lat_sign = 1.0
+    if token.startswith("-"):
+        lat_sign = -1.0
+        token = token[1:]
+
+    cleaned = []
+    for ch in token:
+        if ch.isdigit():
+            cleaned.append(ch)
+            continue
+        if ch in "+-":
+            # WPC bulletins sometimes insert a dash between the latitude and
+            # longitude halves of the compact token, e.g. ``451-1`` or
+            # ``619-1304``. Treat these as separators, not signed longitude.
+            continue
+        raise ValueError(f"unsupported WPC coordinate token '{coordinates}'")
+
+    compact = "".join(cleaned)
+    digit_count = len(compact)
+    if digit_count < 4:
+        raise ValueError(f"unsupported WPC coordinate token '{coordinates}'")
+
+    split_pos = digit_count // 2
+    lat_token = compact[:split_pos]
+    lon_token = compact[split_pos:]
+    lat = float(f"{lat_token[:2]}.{lat_token[2:]}") * lat_sign
+    lon = -float(f"{lon_token[:3]}.{lon_token[3:]}")
+    return lon, lat
 
 
 def _normalize_lon_lat(lon: Any, lat: Any) -> Tuple[float, float]:
@@ -74,6 +110,10 @@ def _normalize_geometry_geojson(geometry: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(geometry)
     out["coordinates"] = out_coords
     return out
+
+
+if metpy_text is not None:
+    metpy_text._decode_coords = _decode_wpc_coords
 
 
 @dataclass
@@ -389,7 +429,7 @@ class WpcSurfaceService:
                 if not re.match(r"^-?\d+$", t):
                     continue
                 try:
-                    coords.append(_decode_coords(t))
+                    coords.append(_decode_wpc_coords(t))
                 except Exception:
                     continue
 
