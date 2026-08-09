@@ -2020,6 +2020,7 @@ const densityPx = useMemo(() => {
   const [metpyWxGlyphMap, setMetpyWxGlyphMap] = useState<Record<number, string>>({});
   const [metpyWxFontReady, setMetpyWxFontReady] = useState(false);
   const [unknownWxSymbolCount, setUnknownWxSymbolCount] = useState(0);
+  const [hazardBootstrapReady, setHazardBootstrapReady] = useState(false);
   
   const setSurfaceObsMode = (mode: DisplayMode) => {
     setDisplayMode(mode);
@@ -2072,11 +2073,23 @@ const densityPx = useMemo(() => {
       }
     };
 
-    loadGlyphMap();
+    const glyphLoad =
+      "requestIdleCallback" in window
+        ? window.requestIdleCallback(() => {
+            loadGlyphMap();
+          }, { timeout: 1500 })
+        : window.setTimeout(() => {
+            loadGlyphMap();
+          }, 250);
     loadFont();
 
     return () => {
       cancelled = true;
+      if ("cancelIdleCallback" in window) {
+        window.cancelIdleCallback(glyphLoad as number);
+      } else {
+        window.clearTimeout(glyphLoad as number);
+      }
     };
   }, []);
 
@@ -2403,6 +2416,7 @@ const densityPx = useMemo(() => {
   }, []);
 
   useEffect(() => {
+    if (requestedTimeIso === null) return;
     fetchObservations(requestedTimeIso);
   }, [fetchObservations, requestedTimeIso]);
 
@@ -2410,6 +2424,11 @@ const densityPx = useMemo(() => {
     if (requestedTimeIso !== null) return;
     fetchObservations(null);
   }, [fetchObservations, requestedTimeIso, currentTimeTick]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setHazardBootstrapReady(true), 1500);
+    return () => window.clearTimeout(id);
+  }, []);
 
   useEffect(() => {
     const id = window.setInterval(() => setCurrentTimeTick(Date.now()), 60_000);
@@ -3940,6 +3959,7 @@ const densityPx = useMemo(() => {
   }, [nwsOverlays.wpcSurface, refreshWpcSurface]);
 
   const refreshHazardSummary = useCallback(async () => {
+    if (!hazardBootstrapReady) return;
     setHazardLoadState("loading");
     try {
       const params = new URLSearchParams();
@@ -3959,13 +3979,14 @@ const densityPx = useMemo(() => {
       setHazardError(e?.message ?? "Failed to load hazards summary");
       setHazardLoadState("error");
     }
-  }, [requestedTimeIso]);
+  }, [hazardBootstrapReady, requestedTimeIso]);
 
   useEffect(() => {
+    if (!hazardBootstrapReady) return;
     refreshHazardSummary();
     const id = window.setInterval(refreshHazardSummary, 2 * 60 * 1000);
     return () => window.clearInterval(id);
-  }, [refreshHazardSummary]);
+  }, [hazardBootstrapReady, refreshHazardSummary]);
 
   const dataLayerStatuses = useMemo(() => {
     const statuses: DataLayerStatus[] = [];

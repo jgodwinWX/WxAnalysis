@@ -8,6 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 import os
+import math
 
 from dataclasses import dataclass
 from datetime import timedelta
@@ -56,6 +57,21 @@ def _parse_cors_origins() -> List[str]:
     if not raw:
         return ["http://localhost:5173"]
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def _get_env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning("Invalid integer for %s=%r, using default %d", name, raw, default)
+            value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
 
 
 class SkyCondition(BaseModel):
@@ -141,13 +157,16 @@ _diag_sources: Dict[str, Dict[str, Any]] = {
 }
 
 # Tune these:
-SNAPSHOT_MAX_ITEMS = 2000       # max snapshots to keep
-# Keep enough in memory for 24h-change fields plus some cushion.
-SNAPSHOT_RETENTION_MIN = 30 * 60  # 30 hours (minutes)
+# Keep enough in memory for 24h-change fields plus a small cushion, but no more.
+SNAPSHOT_RETENTION_MIN = _get_env_int("SNAPSHOT_RETENTION_MIN", 26 * 60, minimum=24 * 60)
+SNAPSHOT_MAX_ITEMS = _get_env_int("SNAPSHOT_MAX_ITEMS", 26 * 12 + 24, minimum=24 * 12)
 SNAPSHOT_DB_RETENTION_HOURS = 7 * 24
 SNAPSHOT_DB_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB hard cap
 SNAPSHOT_NEAR_MATCH_MIN = 90
 ARTCC_CACHE_MINUTES = 12 * 60
+WARM_START_DELAY_SECONDS = _get_env_int("WARM_START_DELAY_SECONDS", 3, minimum=0)
+METAR_STARTUP_DELAY_SECONDS = _get_env_int("METAR_STARTUP_DELAY_SECONDS", 12, minimum=0)
+HAZARD_STARTUP_DELAY_SECONDS = _get_env_int("HAZARD_STARTUP_DELAY_SECONDS", 20, minimum=0)
 
 
 def _bucket_match_tolerance_minutes(target: datetime, now: Optional[datetime] = None) -> int:
@@ -419,9 +438,10 @@ def _persist_snapshot_db(t: datetime, stations: List[SurfaceObs]) -> None:
             conn.commit()
 
 
-def _load_recent_snapshots_db(hours: int = SNAPSHOT_DB_RETENTION_HOURS) -> List[Snapshot]:
+def _load_recent_snapshots_db(hours: Optional[int] = None) -> List[Snapshot]:
     if not _snapshot_db_path.exists():
         return []
+    hours = hours or SNAPSHOT_DB_RETENTION_HOURS
     cutoff = _iso_z(datetime.now(timezone.utc) - timedelta(hours=hours))
     out: List[Snapshot] = []
     with _snapshot_db_lock:
@@ -713,7 +733,8 @@ async def warm_start_snapshot_history() -> None:
     """Load recent snapshot history without blocking API startup."""
     global _latest_obs, _last_update
     try:
-        history = await asyncio.to_thread(_load_recent_snapshots_db)
+        history_hours = max(24, math.ceil(SNAPSHOT_RETENTION_MIN / 60.0))
+        history = await asyncio.to_thread(_load_recent_snapshots_db, history_hours)
         if history:
             with _snapshot_lock:
                 _snapshot_history[:] = history
@@ -725,15 +746,33 @@ async def warm_start_snapshot_history() -> None:
         logger.warning(f"Failed loading snapshot history from disk: {e}")
 
 
+async def delayed_warm_start_snapshot_history() -> None:
+    if WARM_START_DELAY_SECONDS > 0:
+        await asyncio.sleep(WARM_START_DELAY_SECONDS)
+    await warm_start_snapshot_history()
+
+
+async def delayed_periodic_update_task() -> None:
+    if METAR_STARTUP_DELAY_SECONDS > 0:
+        await asyncio.sleep(METAR_STARTUP_DELAY_SECONDS)
+    await periodic_update_task()
+
+
+async def delayed_periodic_hazard_update_task() -> None:
+    if HAZARD_STARTUP_DELAY_SECONDS > 0:
+        await asyncio.sleep(HAZARD_STARTUP_DELAY_SECONDS)
+    await periodic_hazard_update_task()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown tasks."""
     await asyncio.to_thread(_init_snapshot_db)
 
     # Startup: start background task
-    snapshot_task = asyncio.create_task(warm_start_snapshot_history())
-    task = asyncio.create_task(periodic_update_task())
-    hazard_task = asyncio.create_task(periodic_hazard_update_task())
+    snapshot_task = asyncio.create_task(delayed_warm_start_snapshot_history())
+    task = asyncio.create_task(delayed_periodic_update_task())
+    hazard_task = asyncio.create_task(delayed_periodic_hazard_update_task())
     logger.info("Started snapshot warm-start background task")
     logger.info("Started METAR update background task")
     logger.info("Started hazard update background task")
