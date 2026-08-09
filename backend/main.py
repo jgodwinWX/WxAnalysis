@@ -40,6 +40,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _default_data_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "data"
+
+
+def _resolve_data_root() -> Path:
+    raw = (os.getenv("DATA_ROOT") or "").strip()
+    if not raw:
+        return _default_data_root()
+    return Path(raw).expanduser().resolve()
+
+
+def _parse_cors_origins() -> List[str]:
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if not raw:
+        return ["http://localhost:5173"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 class SkyCondition(BaseModel):
     cover: str  # CLR, FEW, SCT, BKN, OVC
     level_ft: Optional[float] = None
@@ -99,7 +117,8 @@ _artcc_geojson_cache: Optional[dict] = None
 _artcc_cache_time: Optional[datetime] = None
 _metpy_wx_font_path_cache: Optional[Path] = None
 _metpy_wx_symbol_map_cache: Optional[Dict[str, str]] = None
-_data_root = Path(__file__).resolve().parent.parent / "data"
+_data_root = _resolve_data_root()
+_data_root.mkdir(parents=True, exist_ok=True)
 _mrms_service = MrmsService(cache_root=_data_root / "mrms_cache")
 _goes_service = GoesService(cache_root=_data_root / "goes_cache")
 _glm_service = GlmService(cache_root=_data_root / "glm_cache")
@@ -745,8 +764,8 @@ app = FastAPI(title="Wx Mesoanalysis API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
+    allow_origins=_parse_cors_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

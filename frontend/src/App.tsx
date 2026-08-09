@@ -2,6 +2,14 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import MapGL, { Marker, NavigationControl, ViewState, Source, Layer, MapRef } from "react-map-gl/maplibre";
 import maplibregl from "maplibre-gl";
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
+
+function apiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return API_BASE_URL ? `${API_BASE_URL}${normalizedPath}` : normalizedPath;
+}
+
 type SkyCondition = {
   cover: string;
   level_ft: number | null;
@@ -763,7 +771,7 @@ const ADM1_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson";
 const ADM2_BOUNDARIES_URL =
   "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json";
-const ARTCC_BOUNDARIES_URL = "/api/geography/artcc";
+const ARTCC_BOUNDARIES_URL = apiUrl("/api/geography/artcc");
 const TIME_BUCKETS: Array<{ id: TimeBucketId; label: string; minutesAgo: number | null }> = [
   { id: "minus_360m", label: "6h", minutesAgo: 360 },
   { id: "minus_300m", label: "5h", minutesAgo: 300 },
@@ -2027,7 +2035,7 @@ const densityPx = useMemo(() => {
       styleEl.textContent = `
         @font-face {
           font-family: "MetPyWxSymbols";
-          src: url("/api/metpy/wx_font") format("truetype");
+          src: url("${apiUrl("/api/metpy/wx_font")}") format("truetype");
           font-display: swap;
         }
       `;
@@ -2036,7 +2044,7 @@ const densityPx = useMemo(() => {
 
     const loadGlyphMap = async () => {
       try {
-        const res = await fetch("/api/metpy/wx_symbol_map");
+        const res = await fetch(apiUrl("/api/metpy/wx_symbol_map"));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const raw = (data?.glyphs ?? {}) as Record<string, string>;
@@ -2142,7 +2150,7 @@ const densityPx = useMemo(() => {
 
     try {
       if (requestedIso === null) {
-        const res = await fetch("/api/obs/latest", { signal: ac.signal });
+        const res = await fetch(apiUrl("/api/obs/latest"), { signal: ac.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const stations: SurfaceObs[] = data.stations ?? [];
@@ -2166,7 +2174,7 @@ const densityPx = useMemo(() => {
         return;
       }
 
-      const res = await fetch(`/api/obs/at?time=${encodeURIComponent(requestedIso)}`, {
+      const res = await fetch(apiUrl(`/api/obs/at?time=${encodeURIComponent(requestedIso)}`), {
         signal: ac.signal,
       });
       if (!res.ok) {
@@ -3603,7 +3611,7 @@ const densityPx = useMemo(() => {
     try {
       const params = new URLSearchParams({ product: mrmsField });
       if (requestedTimeIso) params.set("time", requestedTimeIso);
-      const res = await fetch(`/api/mrms/meta?${params.toString()}`);
+      const res = await fetch(apiUrl(`/api/mrms/meta?${params.toString()}`));
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload?.detail ?? `HTTP ${res.status}`);
@@ -3638,7 +3646,7 @@ const densityPx = useMemo(() => {
           lat: cursorProbe.lat.toFixed(5),
           lon: cursorProbe.lng.toFixed(5),
         });
-        const res = await fetch(`/api/mrms/value?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(apiUrl(`/api/mrms/value?${params.toString()}`), { signal: controller.signal });
         if (!res.ok) {
           setMrmsCursorValue(null);
           return;
@@ -3675,7 +3683,7 @@ const densityPx = useMemo(() => {
       const params = new URLSearchParams({ product: goesProduct });
       if (!goesProduct.endsWith("-02")) params.set("style", goesRenderStyle);
       if (requestedTimeIso) params.set("time", requestedTimeIso);
-      const res = await fetch(`/api/goes/meta?${params.toString()}`);
+      const res = await fetch(apiUrl(`/api/goes/meta?${params.toString()}`));
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload?.detail ?? `HTTP ${res.status}`);
@@ -3710,7 +3718,7 @@ const densityPx = useMemo(() => {
           lat: cursorProbe.lat.toFixed(5),
           lon: cursorProbe.lng.toFixed(5),
         });
-        const res = await fetch(`/api/goes/value?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(apiUrl(`/api/goes/value?${params.toString()}`), { signal: controller.signal });
         if (!res.ok) {
           setGoesCursorValue(null);
           return;
@@ -3746,7 +3754,7 @@ const densityPx = useMemo(() => {
     try {
       const params = new URLSearchParams({ product: glmProduct });
       if (requestedTimeIso) params.set("time", requestedTimeIso);
-      const res = await fetch(`/api/glm/meta?${params.toString()}`);
+      const res = await fetch(apiUrl(`/api/glm/meta?${params.toString()}`));
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload?.detail ?? `HTTP ${res.status}`);
@@ -3781,7 +3789,7 @@ const densityPx = useMemo(() => {
           lat: cursorProbe.lat.toFixed(5),
           lon: cursorProbe.lng.toFixed(5),
         });
-        const res = await fetch(`/api/glm/value?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(apiUrl(`/api/glm/value?${params.toString()}`), { signal: controller.signal });
         if (!res.ok) {
           setGlmCursorValue(null);
           return;
@@ -3831,7 +3839,7 @@ const densityPx = useMemo(() => {
         chart: rrfsChart,
         time: rrfsRequestedTimeIso,
       });
-      const res = await fetch(`/api/rrfs/chart?${params.toString()}`);
+      const res = await fetch(apiUrl(`/api/rrfs/chart?${params.toString()}`));
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload?.detail ?? `HTTP ${res.status}`);
@@ -3872,7 +3880,7 @@ const densityPx = useMemo(() => {
           lat: cursorProbe.lat.toFixed(5),
           lon: cursorProbe.lng.toFixed(5),
         });
-        const res = await fetch(`/api/rrfs/chart_value?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(apiUrl(`/api/rrfs/chart_value?${params.toString()}`), { signal: controller.signal });
         if (!res.ok) {
           setRrfsCursorValue(null);
           return;
@@ -3907,7 +3915,7 @@ const densityPx = useMemo(() => {
     try {
       const params = new URLSearchParams();
       if (requestedTimeIso) params.set("time", requestedTimeIso);
-      const url = params.size > 0 ? `/api/nws/wpc_surface?${params.toString()}` : "/api/nws/wpc_surface";
+      const url = params.size > 0 ? apiUrl(`/api/nws/wpc_surface?${params.toString()}`) : apiUrl("/api/nws/wpc_surface");
       const res = await fetch(url);
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
@@ -3936,7 +3944,7 @@ const densityPx = useMemo(() => {
     try {
       const params = new URLSearchParams();
       if (requestedTimeIso) params.set("time", requestedTimeIso);
-      const url = params.size > 0 ? `/api/hazards/summary?${params.toString()}` : "/api/hazards/summary";
+      const url = params.size > 0 ? apiUrl(`/api/hazards/summary?${params.toString()}`) : apiUrl("/api/hazards/summary");
       const res = await fetch(url);
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
@@ -4163,7 +4171,7 @@ const densityPx = useMemo(() => {
   const refreshOpsSummary = useCallback(async () => {
     setOpsLoading(true);
     try {
-      const res = await fetch("/api/ops/summary");
+      const res = await fetch(apiUrl("/api/ops/summary"));
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload?.detail ?? `HTTP ${res.status}`);
@@ -4189,33 +4197,36 @@ const densityPx = useMemo(() => {
 
   const mrmsTileTemplate = useMemo(() => {
     if (mrmsField === "none" || !mrmsMeta) return null;
-    const base =
+    const base = apiUrl(
       mrmsMeta.tile_url_template ??
-      `/api/mrms/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(mrmsField)}&time=${encodeURIComponent(
-        mrmsMeta.matched_time
-      )}`;
+        `/api/mrms/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(mrmsField)}&time=${encodeURIComponent(
+          mrmsMeta.matched_time
+        )}`
+    );
     const sep = base.includes("?") ? "&" : "?";
     return `${base}${sep}cb=${encodeURIComponent(mrmsMeta.matched_time)}`;
   }, [mrmsField, mrmsMeta]);
 
   const goesTileTemplate = useMemo(() => {
     if (goesProduct === "none" || !goesMeta) return null;
-    const base =
+    const base = apiUrl(
       goesMeta.tile_url_template ??
-      `/api/goes/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(goesProduct)}&time=${encodeURIComponent(
-        goesMeta.matched_time
-      )}${goesProduct.endsWith("-02") ? "" : `&style=${encodeURIComponent(goesRenderStyle)}`}`;
+        `/api/goes/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(goesProduct)}&time=${encodeURIComponent(
+          goesMeta.matched_time
+        )}${goesProduct.endsWith("-02") ? "" : `&style=${encodeURIComponent(goesRenderStyle)}`}`
+    );
     const sep = base.includes("?") ? "&" : "?";
     return `${base}${sep}cb=${encodeURIComponent(goesMeta.matched_time)}`;
   }, [goesProduct, goesMeta, goesRenderStyle]);
 
   const glmTileTemplate = useMemo(() => {
     if (glmProduct === "none" || !glmMeta) return null;
-    const base =
+    const base = apiUrl(
       glmMeta.tile_url_template ??
-      `/api/glm/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(glmProduct)}&time=${encodeURIComponent(
-        glmMeta.matched_time
-      )}`;
+        `/api/glm/tile/{z}/{x}/{y}.png?product=${encodeURIComponent(glmProduct)}&time=${encodeURIComponent(
+          glmMeta.matched_time
+        )}`
+    );
     const sep = base.includes("?") ? "&" : "?";
     return `${base}${sep}cb=${encodeURIComponent(glmMeta.matched_time)}`;
   }, [glmProduct, glmMeta]);

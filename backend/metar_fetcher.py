@@ -9,6 +9,7 @@ from typing import List, Optional, Set
 from datetime import datetime, timezone
 from pathlib import Path
 import logging
+import os
 import time
 from metpy.calc import altimeter_to_sea_level_pressure
 from metpy.units import units
@@ -39,6 +40,14 @@ REQUEST_HEADERS = {
     "Accept": "text/csv,text/plain,*/*",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+
+def _data_root() -> Path:
+    default_root = Path(__file__).resolve().parent.parent / "data"
+    raw = (os.getenv("DATA_ROOT") or "").strip()
+    if not raw:
+        return default_root
+    return Path(raw).expanduser().resolve()
 
 
 def fahrenheit_to_celsius(f: Optional[float]) -> Optional[float]:
@@ -123,7 +132,7 @@ def fetch_station_metadata() -> dict:
     Returns dict mapping station ID to descriptive name.
     """
     # Try to load from APT_BASE.csv file
-    csv_path = Path(__file__).resolve().parent.parent / "data" / "APT_BASE.csv"
+    csv_path = _data_root() / "APT_BASE.csv"
     if csv_path.exists():
         try:
             metadata = {}

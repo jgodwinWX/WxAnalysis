@@ -170,6 +170,54 @@ cd frontend
 npm run build
 ```
 
+## Railway Deployment
+
+Recommended Railway layout:
+
+- `frontend/`: static site service
+- `backend/`: web service built from [backend/Dockerfile](/Users/jasongodwin/python/WxAnalysis/backend/Dockerfile)
+- Backend volume mounted at `/app/data`
+
+### Backend Railway settings
+
+- Root directory: `/backend`
+- Healthcheck path: `/api/health`
+- Start command: use the Dockerfile default
+- Replicas: `1`
+
+Backend environment variables:
+
+- `DATA_ROOT=/app/data`
+- `CORS_ORIGINS=https://<your-frontend-domain>`
+
+Notes:
+
+- `DATA_ROOT` should point at the mounted Railway volume so caches and `snapshots.db` survive redeploys.
+- `CORS_ORIGINS` accepts a comma-separated list if you want to allow multiple frontend origins.
+- `APT_BASE.csv` is not committed because `data/` is gitignored, so station metadata will fall back to the remote API unless you place that file on the mounted volume.
+
+### Frontend Railway settings
+
+- Root directory: `/frontend`
+- Build command: `npm run build`
+
+Frontend environment variables:
+
+- `VITE_API_BASE_URL=https://<your-backend-domain>`
+
+Notes:
+
+- If `VITE_API_BASE_URL` is unset, local development continues using the Vite `/api` proxy to `http://127.0.0.1:8000`.
+- Changing `VITE_API_BASE_URL` requires a rebuild because Vite injects it at build time.
+
+### Go-Live Sequence
+
+1. Create the backend service and attach a volume mounted at `/app/data`.
+2. Assign the backend a Railway domain and confirm `GET /api/health` returns `200`.
+3. Create the frontend static service and set `VITE_API_BASE_URL` to the backend domain.
+4. Set `CORS_ORIGINS` on the backend to the frontend domain and redeploy the backend.
+5. Open the frontend domain and verify observations, MRMS, GOES, GLM, and diagnostics all load successfully.
+
 ## Run Workflow
 
 1. Start backend on `:8000`
