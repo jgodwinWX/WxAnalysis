@@ -3,6 +3,9 @@ import MapGL, { Marker, NavigationControl, ViewState, Source, Layer, MapRef } fr
 import maplibregl from "maplibre-gl";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
+const APP_PROFILE = (import.meta.env.VITE_APP_PROFILE ?? "").trim().toLowerCase() || "default";
+const LIVE_ONLY_PROFILE = ["railway", "railway_live", "live", "live_only"].includes(APP_PROFILE);
+const RASTER_PRODUCTS_ENABLED = !LIVE_ONLY_PROFILE;
 
 function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
@@ -784,6 +787,7 @@ const TIME_BUCKETS: Array<{ id: TimeBucketId; label: string; minutesAgo: number 
   { id: "minus_15m", label: "15m", minutesAgo: 15 },
   { id: "latest", label: "Latest", minutesAgo: null },
 ];
+const LIVE_ONLY_TIME_BUCKETS = TIME_BUCKETS.filter((bucket) => bucket.id === "latest");
 const HAZARD_STYLE_BY_KIND: Record<string, { color: string; width: number; label: string; menuGroup: HazardMenuGroup }> = {
   tornado_watch: { color: "#dc2626", width: 2, label: "Tornado Watch", menuGroup: "convectiveWatches" },
   severe_thunderstorm_watch: { color: "#ca8a04", width: 2, label: "Severe Thunderstorm Watch", menuGroup: "convectiveWatches" },
@@ -1256,8 +1260,11 @@ function formatValidTimeLabel(iso: string | null, zone: DisplayTimeZone): string
   return `${hh}${mm} ${tz} ${dow} ${day} ${mon} ${year}`;
 }
 
-function getTimeBucketById(id: TimeBucketId) {
-  return TIME_BUCKETS.find((bucket) => bucket.id === id) ?? TIME_BUCKETS[TIME_BUCKETS.length - 1];
+function getTimeBucketById(
+  id: TimeBucketId,
+  buckets: Array<{ id: TimeBucketId; label: string; minutesAgo: number | null }> = TIME_BUCKETS
+) {
+  return buckets.find((bucket) => bucket.id === id) ?? buckets[buckets.length - 1];
 }
 
 function describeMatchDetail(
@@ -1854,6 +1861,7 @@ function weatherGlyphFromCodes(weatherCodes: string | null | undefined): { metpy
 }
 
 function App() {
+  const activeTimeBuckets = LIVE_ONLY_PROFILE ? LIVE_ONLY_TIME_BUCKETS : TIME_BUCKETS;
   const [obs, setObs] = useState<SurfaceObs[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -1866,6 +1874,7 @@ function App() {
     padding: { top: 0, left: 0, bottom: 0, right: 0 },
   });
   const [selectedTimeBucket, setSelectedTimeBucket] = useState<TimeBucketId>(() => {
+    if (LIVE_ONLY_PROFILE) return "latest";
     const saved = localStorage.getItem("selectedTimeBucket");
     return TIME_BUCKETS.some((bucket) => bucket.id === saved) ? (saved as TimeBucketId) : "latest";
   });
@@ -2149,7 +2158,10 @@ const densityPx = useMemo(() => {
     return saved === "MPH" || saved === "KPH" || saved === "KT" ? saved : "KT";
   });
 
-  const selectedBucket = useMemo(() => getTimeBucketById(selectedTimeBucket), [selectedTimeBucket]);
+  const selectedBucket = useMemo(
+    () => getTimeBucketById(selectedTimeBucket, activeTimeBuckets),
+    [activeTimeBuckets, selectedTimeBucket]
+  );
   const requestedTimeIso = useMemo(() => {
     if (selectedBucket.minutesAgo == null) return null;
     return new Date(currentTimeTick - selectedBucket.minutesAgo * 60_000).toISOString();
@@ -2260,6 +2272,7 @@ const densityPx = useMemo(() => {
   });
 
   const [mrmsField, setMrmsField] = useState<MrmsField>(() => {
+    if (!RASTER_PRODUCTS_ENABLED) return "none";
     const saved = localStorage.getItem("mrmsField");
     if (saved === "rotation240") return "rotationll240";
     return saved === "rala"
@@ -2273,10 +2286,12 @@ const densityPx = useMemo(() => {
       : "none";
   });
   const [goesProduct, setGoesProduct] = useState<GoesProduct>(() => {
+    if (!RASTER_PRODUCTS_ENABLED) return "none";
     const saved = localStorage.getItem("goesProduct");
     return isValidGoesProduct(saved) ? saved : "none";
   });
   const [glmProduct, setGlmProduct] = useState<GlmProduct>(() => {
+    if (!RASTER_PRODUCTS_ENABLED) return "none";
     const saved = localStorage.getItem("glmProduct");
     return isValidGlmProduct(saved) ? saved : "none";
   });
@@ -2436,22 +2451,37 @@ const densityPx = useMemo(() => {
   }, []);
 
   useEffect(() => {
+    if (LIVE_ONLY_PROFILE) return;
     if (!isPlaying) return;
-    const currentIndex = TIME_BUCKETS.findIndex((bucket) => bucket.id === selectedTimeBucket);
+    const currentIndex = activeTimeBuckets.findIndex((bucket) => bucket.id === selectedTimeBucket);
     if (currentIndex < 0) return;
-    const isLatestBucket = currentIndex >= TIME_BUCKETS.length - 1;
+    const isLatestBucket = currentIndex >= activeTimeBuckets.length - 1;
     const delay = isLatestBucket ? playSpeedMs * 2 : playSpeedMs;
 
     const id = window.setTimeout(() => {
       setSelectedTimeBucket((prev) => {
-        const prevIndex = TIME_BUCKETS.findIndex((bucket) => bucket.id === prev);
-        if (prevIndex < 0 || prevIndex >= TIME_BUCKETS.length - 1) return TIME_BUCKETS[0].id;
-        return TIME_BUCKETS[prevIndex + 1].id;
+        const prevIndex = activeTimeBuckets.findIndex((bucket) => bucket.id === prev);
+        if (prevIndex < 0 || prevIndex >= activeTimeBuckets.length - 1) return activeTimeBuckets[0].id;
+        return activeTimeBuckets[prevIndex + 1].id;
       });
     }, delay);
 
     return () => window.clearTimeout(id);
-  }, [isPlaying, playSpeedMs, selectedTimeBucket]);
+  }, [activeTimeBuckets, isPlaying, playSpeedMs, selectedTimeBucket]);
+
+  useEffect(() => {
+    if (!LIVE_ONLY_PROFILE) return;
+    if (selectedTimeBucket !== "latest") setSelectedTimeBucket("latest");
+    if (isPlaying) setIsPlaying(false);
+  }, [isPlaying, selectedTimeBucket]);
+
+  useEffect(() => {
+    if (!RASTER_PRODUCTS_ENABLED) {
+      if (mrmsField !== "none") setMrmsField("none");
+      if (goesProduct !== "none") setGoesProduct("none");
+      if (glmProduct !== "none") setGlmProduct("none");
+    }
+  }, [glmProduct, goesProduct, mrmsField]);
 
   // Handle ESC key to close popup
   useEffect(() => {
@@ -6712,19 +6742,19 @@ useEffect(() => {
 }, [displayTimeZone]);
 
 useEffect(() => {
-  localStorage.setItem("selectedTimeBucket", selectedTimeBucket);
+  localStorage.setItem("selectedTimeBucket", LIVE_ONLY_PROFILE ? "latest" : selectedTimeBucket);
 }, [selectedTimeBucket]);
 
 useEffect(() => {
-  localStorage.setItem("mrmsField", mrmsField);
+  localStorage.setItem("mrmsField", RASTER_PRODUCTS_ENABLED ? mrmsField : "none");
 }, [mrmsField]);
 
 useEffect(() => {
-  localStorage.setItem("goesProduct", goesProduct);
+  localStorage.setItem("goesProduct", RASTER_PRODUCTS_ENABLED ? goesProduct : "none");
 }, [goesProduct]);
 
 useEffect(() => {
-  localStorage.setItem("glmProduct", glmProduct);
+  localStorage.setItem("glmProduct", RASTER_PRODUCTS_ENABLED ? glmProduct : "none");
 }, [glmProduct]);
 
 useEffect(() => {
@@ -7048,6 +7078,7 @@ useEffect(() => {
                 )}
               </div>
             </div>
+            {RASTER_PRODUCTS_ENABLED && (
             <div
               className={`analysis-control ${openHeaderMenu === "mrms" ? "menu-open" : ""}`}
             >
@@ -7138,6 +7169,8 @@ useEffect(() => {
                 )}
               </div>
             </div>
+            )}
+            {RASTER_PRODUCTS_ENABLED && (
             <div
               className={`analysis-control ${openHeaderMenu === "goes" ? "menu-open" : ""}`}
             >
@@ -7240,6 +7273,7 @@ useEffect(() => {
                 )}
               </div>
             </div>
+            )}
             <div
               className={`analysis-control ${openHeaderMenu === "nws" ? "menu-open" : ""}`}
             >
@@ -7419,11 +7453,11 @@ useEffect(() => {
                   onClick={() => {
                     setIsPlaying(false);
                     setSelectedTimeBucket((prev) => {
-                      const idx = TIME_BUCKETS.findIndex((bucket) => bucket.id === prev);
-                      return idx <= 0 ? prev : TIME_BUCKETS[idx - 1].id;
+                      const idx = activeTimeBuckets.findIndex((bucket) => bucket.id === prev);
+                      return idx <= 0 ? prev : activeTimeBuckets[idx - 1].id;
                     });
                   }}
-                  disabled={TIME_BUCKETS.findIndex((bucket) => bucket.id === selectedTimeBucket) <= 0}
+                  disabled={LIVE_ONLY_PROFILE || activeTimeBuckets.findIndex((bucket) => bucket.id === selectedTimeBucket) <= 0}
                 >
                   ◀
                 </button>
@@ -7432,7 +7466,7 @@ useEffect(() => {
                   type="button"
                   className={`control-btn ${isPlaying ? "active" : ""}`}
                   onClick={() => setIsPlaying((p) => !p)}
-                  disabled={TIME_BUCKETS.length < 2}
+                  disabled={LIVE_ONLY_PROFILE || activeTimeBuckets.length < 2}
                 >
                   {isPlaying ? "Pause" : "Play"}
                 </button>
@@ -7443,29 +7477,34 @@ useEffect(() => {
                   onClick={() => {
                     setIsPlaying(false);
                     setSelectedTimeBucket((prev) => {
-                      const idx = TIME_BUCKETS.findIndex((bucket) => bucket.id === prev);
-                      return idx >= TIME_BUCKETS.length - 1 ? prev : TIME_BUCKETS[idx + 1].id;
+                      const idx = activeTimeBuckets.findIndex((bucket) => bucket.id === prev);
+                      return idx >= activeTimeBuckets.length - 1 ? prev : activeTimeBuckets[idx + 1].id;
                     });
                   }}
-                  disabled={TIME_BUCKETS.findIndex((bucket) => bucket.id === selectedTimeBucket) >= TIME_BUCKETS.length - 1}
+                  disabled={
+                    LIVE_ONLY_PROFILE
+                    || activeTimeBuckets.findIndex((bucket) => bucket.id === selectedTimeBucket) >= activeTimeBuckets.length - 1
+                  }
                 >
                   ▶
                 </button>
 
-                <select
-                  className="density-select"
-                  value={playSpeedMs}
-                  onChange={(e) => setPlaySpeedMs(Number(e.target.value))}
-                >
-                  <option value={250}>0.25s</option>
-                  <option value={500}>0.5s</option>
-                  <option value={800}>0.8s</option>
-                  <option value={1200}>1.2s</option>
-                </select>
+                {!LIVE_ONLY_PROFILE && (
+                  <select
+                    className="density-select"
+                    value={playSpeedMs}
+                    onChange={(e) => setPlaySpeedMs(Number(e.target.value))}
+                  >
+                    <option value={250}>0.25s</option>
+                    <option value={500}>0.5s</option>
+                    <option value={800}>0.8s</option>
+                    <option value={1200}>1.2s</option>
+                  </select>
+                )}
               </div>
 
               <div className="time-bucket-row">
-                {TIME_BUCKETS.map((bucket) => (
+                {activeTimeBuckets.map((bucket) => (
                   <button
                     key={bucket.id}
                     type="button"

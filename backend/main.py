@@ -74,6 +74,17 @@ def _get_env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
     return value
 
 
+def _app_profile() -> str:
+    raw = (os.getenv("APP_PROFILE") or "").strip().lower()
+    return raw or "default"
+
+
+APP_PROFILE = _app_profile()
+LIVE_ONLY_PROFILE = APP_PROFILE in {"railway", "railway_live", "live", "live_only"}
+RASTER_PRODUCTS_ENABLED = not LIVE_ONLY_PROFILE
+SNAPSHOT_DB_ENABLED = not LIVE_ONLY_PROFILE
+
+
 class SkyCondition(BaseModel):
     cover: str  # CLR, FEW, SCT, BKN, OVC
     level_ft: Optional[float] = None
@@ -135,9 +146,9 @@ _metpy_wx_font_path_cache: Optional[Path] = None
 _metpy_wx_symbol_map_cache: Optional[Dict[str, str]] = None
 _data_root = _resolve_data_root()
 _data_root.mkdir(parents=True, exist_ok=True)
-_mrms_service = MrmsService(cache_root=_data_root / "mrms_cache")
-_goes_service = GoesService(cache_root=_data_root / "goes_cache")
-_glm_service = GlmService(cache_root=_data_root / "glm_cache")
+_mrms_service = MrmsService(cache_root=_data_root / "mrms_cache") if RASTER_PRODUCTS_ENABLED else None
+_goes_service = GoesService(cache_root=_data_root / "goes_cache") if RASTER_PRODUCTS_ENABLED else None
+_glm_service = GlmService(cache_root=_data_root / "glm_cache") if RASTER_PRODUCTS_ENABLED else None
 _wpc_service = WpcSurfaceService()
 _hazard_service = HazardService()
 _snapshot_db_path = _data_root / "snapshots.db"
@@ -157,9 +168,18 @@ _diag_sources: Dict[str, Dict[str, Any]] = {
 }
 
 # Tune these:
-# Keep enough in memory for 24h-change fields plus a small cushion, but no more.
-SNAPSHOT_RETENTION_MIN = _get_env_int("SNAPSHOT_RETENTION_MIN", 26 * 60, minimum=24 * 60)
-SNAPSHOT_MAX_ITEMS = _get_env_int("SNAPSHOT_MAX_ITEMS", 26 * 12 + 24, minimum=24 * 12)
+# Full profile keeps enough in memory for 24h-change fields plus a small cushion.
+# Live-only profile keeps a much smaller rolling window and no persistent snapshot DB.
+SNAPSHOT_RETENTION_MIN = _get_env_int(
+    "SNAPSHOT_RETENTION_MIN",
+    120 if LIVE_ONLY_PROFILE else 26 * 60,
+    minimum=60 if LIVE_ONLY_PROFILE else 24 * 60,
+)
+SNAPSHOT_MAX_ITEMS = _get_env_int(
+    "SNAPSHOT_MAX_ITEMS",
+    30 if LIVE_ONLY_PROFILE else 26 * 12 + 24,
+    minimum=12 if LIVE_ONLY_PROFILE else 24 * 12,
+)
 SNAPSHOT_DB_RETENTION_HOURS = 7 * 24
 SNAPSHOT_DB_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB hard cap
 SNAPSHOT_NEAR_MATCH_MIN = 90
@@ -389,7 +409,29 @@ def _obs_to_dict(obs: SurfaceObs) -> dict:
     return obs.dict()
 
 
+def _disabled_cache_usage(feature: str) -> dict:
+    return {"status": "disabled", "feature": feature, "path": None, "bytes": 0, "files": 0}
+
+
+def _disabled_freshness(feature: str) -> dict:
+    return {
+        "status": "disabled",
+        "feature": feature,
+        "latest_time": None,
+        "latest_age_minutes": None,
+        "available_count": 0,
+    }
+
+
+def _require_raster_service(service: Any, feature_name: str) -> Any:
+    if service is None:
+        raise HTTPException(status_code=503, detail=f"{feature_name} is disabled in the current app profile")
+    return service
+
+
 def _init_snapshot_db() -> None:
+    if not SNAPSHOT_DB_ENABLED:
+        return
     _snapshot_db_path.parent.mkdir(parents=True, exist_ok=True)
     with _snapshot_db_lock:
         with sqlite3.connect(_snapshot_db_path) as conn:
@@ -406,6 +448,8 @@ def _init_snapshot_db() -> None:
 
 
 def _persist_snapshot_db(t: datetime, stations: List[SurfaceObs]) -> None:
+    if not SNAPSHOT_DB_ENABLED:
+        return
     payload = json.dumps([_obs_to_dict(s) for s in stations], separators=(",", ":"))
     t_iso = _iso_z(t)
     with _snapshot_db_lock:
@@ -439,6 +483,8 @@ def _persist_snapshot_db(t: datetime, stations: List[SurfaceObs]) -> None:
 
 
 def _load_recent_snapshots_db(hours: Optional[int] = None) -> List[Snapshot]:
+    if not SNAPSHOT_DB_ENABLED:
+        return []
     if not _snapshot_db_path.exists():
         return []
     hours = hours or SNAPSHOT_DB_RETENTION_HOURS
@@ -732,6 +778,9 @@ async def periodic_hazard_update_task():
 async def warm_start_snapshot_history() -> None:
     """Load recent snapshot history without blocking API startup."""
     global _latest_obs, _last_update
+    if not SNAPSHOT_DB_ENABLED:
+        logger.info("Snapshot DB disabled; skipping warm-start history load")
+        return
     try:
         history_hours = max(24, math.ceil(SNAPSHOT_RETENTION_MIN / 60.0))
         history = await asyncio.to_thread(_load_recent_snapshots_db, history_hours)
@@ -814,11 +863,13 @@ app.add_middleware(
 def health() -> dict:
     return {
         "status": "ok",
+        "app_profile": APP_PROFILE,
+        "live_only_profile": LIVE_ONLY_PROFILE,
         "last_update": _last_update.isoformat() if _last_update else None,
         "station_count": len(_latest_obs),
-        "mrms_cache": _mrms_service.cache_usage(),
-        "goes_cache": _goes_service.cache_usage(),
-        "glm_cache": _glm_service.cache_usage(),
+        "mrms_cache": _mrms_service.cache_usage() if _mrms_service else _disabled_cache_usage("mrms"),
+        "goes_cache": _goes_service.cache_usage() if _goes_service else _disabled_cache_usage("goes"),
+        "glm_cache": _glm_service.cache_usage() if _glm_service else _disabled_cache_usage("glm"),
     }
 
 
@@ -857,6 +908,8 @@ def _ops_collect_freshness() -> dict:
 
     def mrms_product_freshness(product: str) -> dict:
         source = f"mrms:{product}"
+        if _mrms_service is None:
+            return _disabled_freshness(source)
         try:
             fresh = _mrms_service.get_freshness(product)
             with _diag_lock:
@@ -887,6 +940,8 @@ def _ops_collect_freshness() -> dict:
 
     def glm_product_freshness(product: str) -> dict:
         source = f"glm:{product}"
+        if _glm_service is None:
+            return _disabled_freshness(source)
         try:
             fresh = _glm_service.get_freshness(product)
             with _diag_lock:
@@ -980,12 +1035,14 @@ def _ops_collect_health() -> dict:
     return {
         "status": status,
         "generated_at": _iso_z(now),
+        "app_profile": APP_PROFILE,
+        "live_only_profile": LIVE_ONLY_PROFILE,
         "uptime_seconds": int((now - _app_started_at).total_seconds()),
         "started_at": _iso_z(_app_started_at),
         "last_update": _iso_z(_last_update) if _last_update else None,
         "station_count": len(_latest_obs),
-        "mrms_cache": _mrms_service.cache_usage(),
-        "glm_cache": _glm_service.cache_usage(),
+        "mrms_cache": _mrms_service.cache_usage() if _mrms_service else _disabled_cache_usage("mrms"),
+        "glm_cache": _glm_service.cache_usage() if _glm_service else _disabled_cache_usage("glm"),
         "storage_total_bytes": int(((storage.get("components") or {}).get("data_root") or {}).get("bytes", 0)),
         "metar_latest_age_minutes": _age_minutes_from_iso(_iso_z(_last_update) if _last_update else None),
     }
@@ -1020,6 +1077,10 @@ def ops_summary() -> dict:
         "storage": _ops_collect_storage(),
         "errors": _ops_collect_errors(),
         "config": {
+            "app_profile": APP_PROFILE,
+            "live_only_profile": LIVE_ONLY_PROFILE,
+            "raster_products_enabled": RASTER_PRODUCTS_ENABLED,
+            "snapshot_db_enabled": SNAPSHOT_DB_ENABLED,
             "history_window_minutes": 360,
             "snapshot_retention_minutes": SNAPSHOT_RETENTION_MIN,
             "snapshot_db_retention_hours": SNAPSHOT_DB_RETENTION_HOURS,
@@ -1142,6 +1203,11 @@ def obs_at(time: str = Query(..., description="UTC ISO time, e.g. 2025-12-24T18:
             best_diff_min = abs((snap.t - target).total_seconds()) / 60.0
 
     if snap is None or (best_diff_min is not None and best_diff_min > tolerance_minutes):
+        if LIVE_ONLY_PROFILE:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Historical snapshots are disabled for app profile '{APP_PROFILE}'",
+            )
         try:
             archive_stations = _fetch_archive_snapshot_near(target)
             if archive_stations:
@@ -1214,10 +1280,11 @@ def artcc_boundaries() -> dict:
 def mrms_times(
     product: str = Query(default="rala", description="MRMS product id"),
 ) -> dict:
+    mrms_service = _require_raster_service(_mrms_service, "MRMS")
     source = f"mrms:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
-        out = {"product": product, "times": _mrms_service.get_times(product)}
+        out = {"product": product, "times": mrms_service.get_times(product)}
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1234,6 +1301,7 @@ def mrms_meta(
     product: str = Query(default="rala", description="MRMS product id"),
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
 ) -> dict:
+    mrms_service = _require_raster_service(_mrms_service, "MRMS")
     source = f"mrms:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1243,7 +1311,7 @@ def mrms_meta(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        out = _mrms_service.get_meta(product, target)
+        out = mrms_service.get_meta(product, target)
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1263,6 +1331,7 @@ def mrms_image(
     product: str = Query(default="rala", description="MRMS product id"),
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
 ) -> Response:
+    mrms_service = _require_raster_service(_mrms_service, "MRMS")
     source = f"mrms:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1272,7 +1341,7 @@ def mrms_image(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        png_path, meta = _mrms_service.get_rendered_image(product, target)
+        png_path, meta = mrms_service.get_rendered_image(product, target)
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
@@ -1311,6 +1380,7 @@ def mrms_tile(
     product: str = Query(default="rala", description="MRMS product id"),
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
 ) -> Response:
+    mrms_service = _require_raster_service(_mrms_service, "MRMS")
     source = f"mrms:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1320,7 +1390,7 @@ def mrms_tile(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        png_bytes, meta = _mrms_service.get_tile_png(product, target, z, x, y)
+        png_bytes, meta = mrms_service.get_tile_png(product, target, z, x, y)
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
@@ -1354,6 +1424,7 @@ def mrms_value(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
 ) -> dict:
+    mrms_service = _require_raster_service(_mrms_service, "MRMS")
     source = f"mrms:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     if lat < -90 or lat > 90 or lon < -180 or lon > 180:
@@ -1366,7 +1437,7 @@ def mrms_value(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        out = _mrms_service.get_value(product, target, lat=lat, lon=lon)
+        out = mrms_service.get_value(product, target, lat=lat, lon=lon)
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1385,10 +1456,11 @@ def mrms_value(
 def goes_times(
     product: str = Query(..., description="GOES product id"),
 ) -> dict:
+    goes_service = _require_raster_service(_goes_service, "GOES")
     source = f"goes:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
-        out = {"product": product, "times": _goes_service.get_times(product)}
+        out = {"product": product, "times": goes_service.get_times(product)}
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1406,6 +1478,7 @@ def goes_meta(
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
     style: str = Query(default="enhanced", description="GOES render style"),
 ) -> dict:
+    goes_service = _require_raster_service(_goes_service, "GOES")
     source = f"goes:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1415,7 +1488,7 @@ def goes_meta(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        out = _goes_service.get_meta(product, target, render_style=style)
+        out = goes_service.get_meta(product, target, render_style=style)
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1436,6 +1509,7 @@ def goes_image(
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
     style: str = Query(default="enhanced", description="GOES render style"),
 ) -> Response:
+    goes_service = _require_raster_service(_goes_service, "GOES")
     source = f"goes:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1445,7 +1519,7 @@ def goes_image(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        png_path, meta = _goes_service.get_rendered_image(product, target, render_style=style)
+        png_path, meta = goes_service.get_rendered_image(product, target, render_style=style)
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
@@ -1484,6 +1558,7 @@ def goes_tile(
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
     style: str = Query(default="enhanced", description="GOES render style"),
 ) -> Response:
+    goes_service = _require_raster_service(_goes_service, "GOES")
     source = f"goes:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1493,7 +1568,7 @@ def goes_tile(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        png_bytes, meta = _goes_service.get_tile_png(product, target, z, x, y, render_style=style)
+        png_bytes, meta = goes_service.get_tile_png(product, target, z, x, y, render_style=style)
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
@@ -1526,6 +1601,7 @@ def goes_value(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
 ) -> dict:
+    goes_service = _require_raster_service(_goes_service, "GOES")
     source = f"goes:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     if lat < -90 or lat > 90 or lon < -180 or lon > 180:
@@ -1538,7 +1614,7 @@ def goes_value(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        out = _goes_service.get_value(product, target, lat=lat, lon=lon)
+        out = goes_service.get_value(product, target, lat=lat, lon=lon)
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1557,10 +1633,11 @@ def goes_value(
 def glm_times(
     product: str = Query(..., description="GLM product id"),
 ) -> dict:
+    glm_service = _require_raster_service(_glm_service, "GLM")
     source = f"glm:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
-        out = {"product": product, "times": _glm_service.get_times(product)}
+        out = {"product": product, "times": glm_service.get_times(product)}
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1577,6 +1654,7 @@ def glm_meta(
     product: str = Query(..., description="GLM product id"),
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
 ) -> dict:
+    glm_service = _require_raster_service(_glm_service, "GLM")
     source = f"glm:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1586,7 +1664,7 @@ def glm_meta(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        out = _glm_service.get_meta(product, target)
+        out = glm_service.get_meta(product, target)
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
@@ -1606,6 +1684,7 @@ def glm_image(
     product: str = Query(..., description="GLM product id"),
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
 ) -> Response:
+    glm_service = _require_raster_service(_glm_service, "GLM")
     source = f"glm:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1615,7 +1694,7 @@ def glm_image(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        png_path, meta = _glm_service.get_rendered_image(product, target)
+        png_path, meta = glm_service.get_rendered_image(product, target)
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
@@ -1653,6 +1732,7 @@ def glm_tile(
     product: str = Query(..., description="GLM product id"),
     time: Optional[str] = Query(default=None, description="Requested UTC ISO time"),
 ) -> Response:
+    glm_service = _require_raster_service(_glm_service, "GLM")
     source = f"glm:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     try:
@@ -1662,7 +1742,7 @@ def glm_tile(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        png_bytes, meta = _glm_service.get_tile_png(product, target, z, x, y)
+        png_bytes, meta = glm_service.get_tile_png(product, target, z, x, y)
     except ValueError as e:
         _diag_mark_failure(source, e, (pytime.perf_counter() - t0) * 1000.0)
         raise HTTPException(status_code=400, detail=str(e))
@@ -1695,6 +1775,7 @@ def glm_value(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
 ) -> dict:
+    glm_service = _require_raster_service(_glm_service, "GLM")
     source = f"glm:{(product or '').strip().lower()}"
     t0 = pytime.perf_counter()
     if lat < -90 or lat > 90 or lon < -180 or lon > 180:
@@ -1707,7 +1788,7 @@ def glm_value(
         raise HTTPException(status_code=400, detail="Invalid time format; expected ISO like 2025-12-24T18:05:00Z")
 
     try:
-        out = _glm_service.get_value(product, target, lat=lat, lon=lon)
+        out = glm_service.get_value(product, target, lat=lat, lon=lon)
         _diag_mark_success(source, (pytime.perf_counter() - t0) * 1000.0)
         return out
     except ValueError as e:
