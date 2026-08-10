@@ -2580,6 +2580,7 @@ const densityPx = useMemo(() => {
         const x = point.x;
         const y = point.y;
         const radius = zoom < 7.5 ? 6 : 8;
+        const flightRuleColor = colorCodeByFlightRule ? getFlightRuleColor(station.flightRule) : "#ffffff";
 
         if (displayMode === "weather") {
           const glyph = weatherGlyphFromCodes(station.weatherCodes);
@@ -2613,11 +2614,12 @@ const densityPx = useMemo(() => {
           maxFill = Math.max(maxFill, fill);
         }
 
-        // Draw station circle outline
-        ctx.strokeStyle = "#000000";
-        ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = flightRuleColor;
+        ctx.fill();
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1.5;
         ctx.stroke();
 
         // Draw sky cover fill (wedge)
@@ -2679,7 +2681,7 @@ const densityPx = useMemo(() => {
       }
     }
     setUnknownWxSymbolCount(unknownCount);
-  }, [declutteredObs, tempUnit, viewState, displayMode, showStations, metpyWxGlyphMap, metpyWxFontReady]);
+  }, [declutteredObs, tempUnit, viewState, displayMode, showStations, metpyWxGlyphMap, metpyWxFontReady, colorCodeByFlightRule]);
 
   useEffect(() => {
     if (displayMode !== "weather") {
