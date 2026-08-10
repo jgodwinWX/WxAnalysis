@@ -5,7 +5,7 @@ import maplibregl from "maplibre-gl";
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 const APP_PROFILE = (import.meta.env.VITE_APP_PROFILE ?? "").trim().toLowerCase() || "default";
 const LIVE_ONLY_PROFILE = ["railway", "railway_live", "live", "live_only"].includes(APP_PROFILE);
-const RASTER_PRODUCTS_ENABLED = !LIVE_ONLY_PROFILE;
+const RASTER_PRODUCTS_ENABLED = true;
 
 function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
@@ -7078,7 +7078,6 @@ useEffect(() => {
                 )}
               </div>
             </div>
-            {RASTER_PRODUCTS_ENABLED && (
             <div
               className={`analysis-control ${openHeaderMenu === "mrms" ? "menu-open" : ""}`}
             >
@@ -7169,8 +7168,6 @@ useEffect(() => {
                 )}
               </div>
             </div>
-            )}
-            {RASTER_PRODUCTS_ENABLED && (
             <div
               className={`analysis-control ${openHeaderMenu === "goes" ? "menu-open" : ""}`}
             >
@@ -7273,7 +7270,6 @@ useEffect(() => {
                 )}
               </div>
             </div>
-            )}
             <div
               className={`analysis-control ${openHeaderMenu === "nws" ? "menu-open" : ""}`}
             >
@@ -7446,50 +7442,47 @@ useEffect(() => {
             <div className="header-row header-row-bottom">
             <div className="time-control">
               <div className="time-title">TIME</div>
-              <div className="time-row">
-                <button
-                  type="button"
-                  className="control-btn"
-                  onClick={() => {
-                    setIsPlaying(false);
-                    setSelectedTimeBucket((prev) => {
-                      const idx = activeTimeBuckets.findIndex((bucket) => bucket.id === prev);
-                      return idx <= 0 ? prev : activeTimeBuckets[idx - 1].id;
-                    });
-                  }}
-                  disabled={LIVE_ONLY_PROFILE || activeTimeBuckets.findIndex((bucket) => bucket.id === selectedTimeBucket) <= 0}
-                >
-                  ◀
-                </button>
+              {!LIVE_ONLY_PROFILE && (
+                <div className="time-row">
+                  <button
+                    type="button"
+                    className="control-btn"
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setSelectedTimeBucket((prev) => {
+                        const idx = activeTimeBuckets.findIndex((bucket) => bucket.id === prev);
+                        return idx <= 0 ? prev : activeTimeBuckets[idx - 1].id;
+                      });
+                    }}
+                    disabled={activeTimeBuckets.findIndex((bucket) => bucket.id === selectedTimeBucket) <= 0}
+                  >
+                    ◀
+                  </button>
 
-                <button
-                  type="button"
-                  className={`control-btn ${isPlaying ? "active" : ""}`}
-                  onClick={() => setIsPlaying((p) => !p)}
-                  disabled={LIVE_ONLY_PROFILE || activeTimeBuckets.length < 2}
-                >
-                  {isPlaying ? "Pause" : "Play"}
-                </button>
+                  <button
+                    type="button"
+                    className={`control-btn ${isPlaying ? "active" : ""}`}
+                    onClick={() => setIsPlaying((p) => !p)}
+                    disabled={activeTimeBuckets.length < 2}
+                  >
+                    {isPlaying ? "Pause" : "Play"}
+                  </button>
 
-                <button
-                  type="button"
-                  className="control-btn"
-                  onClick={() => {
-                    setIsPlaying(false);
-                    setSelectedTimeBucket((prev) => {
-                      const idx = activeTimeBuckets.findIndex((bucket) => bucket.id === prev);
-                      return idx >= activeTimeBuckets.length - 1 ? prev : activeTimeBuckets[idx + 1].id;
-                    });
-                  }}
-                  disabled={
-                    LIVE_ONLY_PROFILE
-                    || activeTimeBuckets.findIndex((bucket) => bucket.id === selectedTimeBucket) >= activeTimeBuckets.length - 1
-                  }
-                >
-                  ▶
-                </button>
+                  <button
+                    type="button"
+                    className="control-btn"
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setSelectedTimeBucket((prev) => {
+                        const idx = activeTimeBuckets.findIndex((bucket) => bucket.id === prev);
+                        return idx >= activeTimeBuckets.length - 1 ? prev : activeTimeBuckets[idx + 1].id;
+                      });
+                    }}
+                    disabled={activeTimeBuckets.findIndex((bucket) => bucket.id === selectedTimeBucket) >= activeTimeBuckets.length - 1}
+                  >
+                    ▶
+                  </button>
 
-                {!LIVE_ONLY_PROFILE && (
                   <select
                     className="density-select"
                     value={playSpeedMs}
@@ -7500,8 +7493,8 @@ useEffect(() => {
                     <option value={800}>0.8s</option>
                     <option value={1200}>1.2s</option>
                   </select>
-                )}
-              </div>
+                </div>
+              )}
 
               <div className="time-bucket-row">
                 {activeTimeBuckets.map((bucket) => (

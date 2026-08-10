@@ -81,8 +81,23 @@ def _app_profile() -> str:
 
 APP_PROFILE = _app_profile()
 LIVE_ONLY_PROFILE = APP_PROFILE in {"railway", "railway_live", "live", "live_only"}
-RASTER_PRODUCTS_ENABLED = not LIVE_ONLY_PROFILE
+RASTER_PRODUCTS_ENABLED = True
 SNAPSHOT_DB_ENABLED = not LIVE_ONLY_PROFILE
+
+RASTER_HISTORY_MINUTES = _get_env_int("RASTER_HISTORY_MINUTES", 75 if LIVE_ONLY_PROFILE else 360, minimum=15)
+RASTER_RAW_RETENTION_MINUTES = _get_env_int(
+    "RASTER_RAW_RETENTION_MINUTES",
+    90 if LIVE_ONLY_PROFILE else 12 * 60,
+    minimum=15,
+)
+MRMS_MAX_CACHE_GB = float((os.getenv("MRMS_MAX_CACHE_GB") or (0.75 if LIVE_ONLY_PROFILE else 8.0)))
+GOES_MAX_CACHE_GB = float((os.getenv("GOES_MAX_CACHE_GB") or (0.75 if LIVE_ONLY_PROFILE else 12.0)))
+GLM_MAX_CACHE_GB = float((os.getenv("GLM_MAX_CACHE_GB") or (0.35 if LIVE_ONLY_PROFILE else 6.0)))
+RASTER_CLEANUP_INTERVAL_MINUTES = _get_env_int(
+    "RASTER_CLEANUP_INTERVAL_MINUTES",
+    5 if LIVE_ONLY_PROFILE else 10,
+    minimum=1,
+)
 
 
 class SkyCondition(BaseModel):
@@ -146,9 +161,27 @@ _metpy_wx_font_path_cache: Optional[Path] = None
 _metpy_wx_symbol_map_cache: Optional[Dict[str, str]] = None
 _data_root = _resolve_data_root()
 _data_root.mkdir(parents=True, exist_ok=True)
-_mrms_service = MrmsService(cache_root=_data_root / "mrms_cache") if RASTER_PRODUCTS_ENABLED else None
-_goes_service = GoesService(cache_root=_data_root / "goes_cache") if RASTER_PRODUCTS_ENABLED else None
-_glm_service = GlmService(cache_root=_data_root / "glm_cache") if RASTER_PRODUCTS_ENABLED else None
+_mrms_service = MrmsService(
+    cache_root=_data_root / "mrms_cache",
+    history_minutes=RASTER_HISTORY_MINUTES,
+    raw_retention_minutes=RASTER_RAW_RETENTION_MINUTES,
+    max_cache_gb=MRMS_MAX_CACHE_GB,
+    cleanup_interval_minutes=RASTER_CLEANUP_INTERVAL_MINUTES,
+) if RASTER_PRODUCTS_ENABLED else None
+_goes_service = GoesService(
+    cache_root=_data_root / "goes_cache",
+    history_minutes=RASTER_HISTORY_MINUTES,
+    raw_retention_minutes=RASTER_RAW_RETENTION_MINUTES,
+    max_cache_gb=GOES_MAX_CACHE_GB,
+    cleanup_interval_minutes=RASTER_CLEANUP_INTERVAL_MINUTES,
+) if RASTER_PRODUCTS_ENABLED else None
+_glm_service = GlmService(
+    cache_root=_data_root / "glm_cache",
+    history_minutes=RASTER_HISTORY_MINUTES,
+    raw_retention_minutes=RASTER_RAW_RETENTION_MINUTES,
+    max_cache_gb=GLM_MAX_CACHE_GB,
+    cleanup_interval_minutes=RASTER_CLEANUP_INTERVAL_MINUTES,
+) if RASTER_PRODUCTS_ENABLED else None
 _wpc_service = WpcSurfaceService()
 _hazard_service = HazardService()
 _snapshot_db_path = _data_root / "snapshots.db"
